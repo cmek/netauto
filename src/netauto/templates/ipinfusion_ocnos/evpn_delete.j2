@@ -1,0 +1,14 @@
+{# IPInfusion OcNOS EVPN Service Delete Template #}
+router bgp {{ bgp_as }}
+  address-family l2vpn evpn
+    no vni {{ vni }}
+    exit-vni
+  exit-address-family
+  exit
+interface vxlan 1
+  no vxlan vni {{ vni }} vlan {{ vlan_id }}
+  exit
+no vrf {{ vrf_name }}
+vlan database
+  no vlan {{ vlan_id }}
+  exit

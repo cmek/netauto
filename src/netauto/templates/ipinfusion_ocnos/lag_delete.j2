@@ -1,0 +1,7 @@
+{# IPInfusion OcNOS LAG Delete Template #}
+{% for member in members %}
+interface {{ member }}
+  no channel-group
+  exit
+{% endfor %}
+no interface {{ lag_name }}

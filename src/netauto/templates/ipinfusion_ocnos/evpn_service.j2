@@ -1,0 +1,34 @@
+{# IPInfusion OcNOS EVPN Service Configuration Template #}
+vlan database
+  vlan {{ vlan_id }}
+{% if s_tag %}
+    name EVPN_VLAN_{{ vlan_id }}_STAG_{{ s_tag }}
+{% endif %}
+  exit
+vrf {{ vrf.name }}
+  rd {{ vrf.rd }}
+{% for rt in vrf.rt_import %}
+  route-target import {{ rt }}
+{% endfor %}
+{% for rt in vrf.rt_export %}
+  route-target export {{ rt }}
+{% endfor %}
+  exit
+interface vxlan 1
+  vxlan source-interface loopback 0
+  vxlan vni {{ vni }} vlan {{ vlan_id }}
+  exit
+router bgp {{ bgp_as }}
+  address-family l2vpn evpn
+    vni {{ vni }}
+      rd {{ vrf.rd }}
+{% for rt in vrf.rt_import %}
+      route-target import {{ rt }}
+{% endfor %}
+{% for rt in vrf.rt_export %}
+      route-target export {{ rt }}
+{% endfor %}
+      exit
+    exit-vni
+  exit-address-family
+  exit

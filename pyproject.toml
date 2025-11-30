@@ -1,0 +1,31 @@
+[project]
+name = "netauto"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Szymon Roczniak", email = "simon@dischaos.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "jinja2>=3.1.6",
+    "jsonrpclib>=0.2.1",
+    "paramiko>=4.0.0",
+    "pydantic>=2.12.4",
+    "scrapli>=2025.1.30",
+    "scrapli-community>=2025.1.30",
+    "scrapli-netconf>=2025.1.30",
+]
+
+[project.scripts]
+netauto = "netauto:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.1",
+    "pytest-cov>=7.0.0",
+]

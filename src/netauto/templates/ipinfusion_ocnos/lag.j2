@@ -1,0 +1,15 @@
+{# IPInfusion OcNOS LAG Configuration Template #}
+interface {{ lag_name }}
+{% if has_vlans %}
+  switchport mode trunk
+  switchport trunk allowed vlan {{ vlans|join(',') }}
+{% else %}
+  no switchport
+{% endif %}
+  exit
+{% for member in members %}
+interface {{ member }}
+  no shutdown
+  channel-group {{ lag_number }} mode {{ lacp_mode }}
+  exit
+{% endfor %}

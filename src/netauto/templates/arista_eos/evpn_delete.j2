@@ -1,0 +1,9 @@
+{# Arista EOS EVPN Service Delete Template #}
+router bgp {{ bgp_as }}
+  no vlan {{ vlan_id }}
+  exit
+interface Vxlan1
+  no vxlan vlan {{ vlan_id }} vni {{ vni }}
+  exit
+no vrf definition {{ vrf_name }}
+no vlan {{ vlan_id }}

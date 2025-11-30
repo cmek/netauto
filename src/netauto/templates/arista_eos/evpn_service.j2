@@ -1,0 +1,27 @@
+{# Arista EOS EVPN Service Configuration Template #}
+vlan {{ vlan_id }}
+{% if s_tag %}
+  name EVPN_VLAN_{{ vlan_id }}_STAG_{{ s_tag }}
+{% else %}
+  name EVPN_VLAN_{{ vlan_id }}
+{% endif %}
+  exit
+vrf definition {{ vrf.name }}
+  rd {{ vrf.rd }}
+{% for rt in vrf.rt_import %}
+  route-target import {{ rt }}
+{% endfor %}
+{% for rt in vrf.rt_export %}
+  route-target export {{ rt }}
+{% endfor %}
+  exit
+interface Vxlan1
+  vxlan vlan {{ vlan_id }} vni {{ vni }}
+  exit
+router bgp {{ bgp_as }}
+  vlan {{ vlan_id }}
+    rd {{ vrf.rd }}
+    route-target both {{ vrf.rt_import[0] }}
+    redistribute learned
+    exit
+  exit
