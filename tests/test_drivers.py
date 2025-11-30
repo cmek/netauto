@@ -1,7 +1,21 @@
 import pytest
 from netauto.models import Interface, Vlan
-from netauto.drivers import MockDriver
+from netauto.drivers import MockDriver, OcnosDriver
 
+class TestOcnosDriver:
+    """Tests for the ocnos driver"""
+
+    def test_ocnos_extract_interfaces(self):
+        """Test interface extraction logic from ocnos netconf response."""
+        driver = OcnosDriver("127.0.0.1", "admin", "admin")
+        with open("tests/ocnos_interfaces.xml") as f:
+            data = f.read()
+
+        interfaces = driver._extract_interfaces(data)
+
+        print(interfaces)
+        assert "eth0" in interfaces
+        assert "po10" in interfaces
 
 class TestMockDriver:
     """Test suite for MockDriver functionality."""

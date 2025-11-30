@@ -222,6 +222,61 @@ class OcnosDriver(DeviceDriver):
     def disconnect(self):
         self.conn.close()
 
+    def _extract_interfaces(self, interfaces_data) -> Dict[str, Interface]:
+        """
+        extracts interfaces from the xml response
+        """
+        root = ET.fromstring(interfaces_data)
+        # Namespace map
+        ns = {'ocnos': 'http://www.ipinfusion.com/yang/ocnos/ipi-interface',
+              'nc': 'urn:ietf:params:xml:ns:netconf:base:1.0'}
+
+        interfaces = {}
+
+        ## work around bug (or a feature??) of OCNOS where some of the interfaces
+        # are not returned under the <interfaces> tag but instead they appear
+        # to be added at the same level. Because of that placement they are under
+        # different namespaces so we need to look twice (or use something 
+        # like [local-name()='interface'] in xpath
+        # but instead we'll just cycle through both namespaces to catch all instances...
+        for namespace in ns.keys():
+            for intf in root.findall(f".//{namespace}:interface", ns):
+                name = intf.find(f"{namespace}:name", ns).text
+                if name is None:
+                    logging.info(f"couldn't find name for interface {intf}, skipping")
+                    continue
+
+                # Determine mode and VLANs
+                mode = "routed"
+                trunk_vlans = []
+                access_vlan = None
+
+                eth_opts = intf.find(f'{namespace}:ether-options', ns)
+                agg_opts = intf.find(f'{namespace}:aggregated-ether-options', ns)
+
+                # Check for L2/Switchport info (simplified logic as YANG structure varies)
+                # In real OcNOS, this might be under a different subtree or augmented model
+                # For now, we'll default to routed unless we see specific L2 indicators
+                # This is a placeholder for actual YANG parsing logic
+
+                interfaces[name] = Interface(
+                    name=name,
+                    mode=mode,
+                    trunk_vlans=trunk_vlans,
+                    access_vlan=access_vlan
+                )
+        return interfaces
+
+    def get_config(self) -> str:
+        """
+        Retrieves the whole config. This is mostly useful for testing
+        """
+        try:
+            return self.conn.get_config()
+        except Exception as e:
+            logging.error(f"Failed to get configuration: {e}")
+            return ""
+
     def get_interfaces(self) -> Dict[str, Interface]:
         """
         Retrieves interfaces from OcNOS using Netconf.
@@ -240,34 +295,8 @@ class OcnosDriver(DeviceDriver):
             response = self.conn.get(filter_=filter_)
             if not response.result:
                 return {}
-            
-            root = ET.fromstring(response.result)
-            # Namespace map
-            ns = {'ocnos': 'http://www.ipinfusion.com/yang/ocnos/ipi-interface'}
-            
-            interfaces = {}
-            for intf in root.findall('.//ocnos:interface', ns):
-                name = intf.find('ocnos:name', ns).text
-                
-                # Determine mode and VLANs
-                mode = "routed"
-                trunk_vlans = []
-                access_vlan = None
-                
-                eth_opts = intf.find('ocnos:ether-options', ns)
-                agg_opts = intf.find('ocnos:aggregated-ether-options', ns)
-                
-                # Check for L2/Switchport info (simplified logic as YANG structure varies)
-                # In real OcNOS, this might be under a different subtree or augmented model
-                # For now, we'll default to routed unless we see specific L2 indicators
-                # This is a placeholder for actual YANG parsing logic
-                
-                interfaces[name] = Interface(
-                    name=name,
-                    mode=mode,
-                    trunk_vlans=trunk_vlans,
-                    access_vlan=access_vlan
-                )
+
+            interfaces = self._extract_interfaces(response.result)
             return interfaces
         except Exception as e:
             logging.error(f"Failed to get interfaces: {e}")

@@ -15,8 +15,7 @@ def main():
     arista_host = os.getenv("ARISTA_HOST", "172.20.30.4")
     ocnos_host = os.getenv("OCNOS_HOST", "172.20.30.6")
     username = os.getenv("DEVICE_USER", "admin")
-    arista_password = os.getenv("ARISTA_DEVICE_PASSWORD", "admin")
-    ocnos_password = os.getenv("OCNOS_DEVICE_PASSWORD", "admin")
+    password = os.getenv("DEVICE_PASSWORD", "admin@123")
 
     logger.info("Starting Live Device Demo")
     logger.info(f"Arista Host: {arista_host}")
@@ -25,7 +24,7 @@ def main():
     # --- Arista Demo ---
     try:
         logger.info("Connecting to Arista...")
-        arista = AristaDriver(host=arista_host, user=username, password=arista_password)
+        arista = AristaDriver(host=arista_host, user=username, password=password)
         arista.connect()
         logger.info("Connected to Arista!")
 
@@ -65,7 +64,7 @@ def main():
     # --- OcNOS Demo ---
     try:
         logger.info("Connecting to OcNOS...")
-        ocnos = OcnosDriver(host=ocnos_host, user=username, password=ocnos_password)
+        ocnos = OcnosDriver(host=ocnos_host, user=username, password=password)
         ocnos.connect()
         logger.info("Connected to OcNOS!")
 
