@@ -10,7 +10,13 @@ class TestInterfaceManager:
     def test_basic_interface_updates(self):
         """Test creating a LAG from two trunk ports with VLANs."""
         initial_interfaces = [
-            Interface(name="Ethernet1", mode="trunk", mtu=1500, description="something", trunk_vlans=[10, 20]),
+            Interface(
+                name="Ethernet1",
+                mode="trunk",
+                mtu=1500,
+                description="something",
+                trunk_vlans=[10, 20],
+            ),
             Interface(name="Ethernet2", mode="trunk", trunk_vlans=[20, 30]),
         ]
         driver = MockDriver(initial_interfaces=initial_interfaces)

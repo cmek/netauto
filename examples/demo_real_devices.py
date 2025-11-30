@@ -7,8 +7,11 @@ from netauto.models import EvpnService, Vrf, Vlan
 from netauto.exceptions import NetAutoException
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
+
 
 def main():
     # Configuration
@@ -31,7 +34,7 @@ def main():
         # Read state
         interfaces = arista.get_interfaces()
         logger.info(f"Retrieved {len(interfaces)} interfaces from Arista")
-        
+
         vlans = arista.get_vlans()
         logger.info(f"Retrieved {len(vlans)} VLANs from Arista")
 
@@ -40,21 +43,26 @@ def main():
         # Note: We don't have a VlanManager, but we can use EvpnManager or just push config
         # Let's use a simple config push for this demo part or use the managers if applicable
         # The project structure implies using Managers.
-        
+
         # Let's try to deploy an EVPN service as a test
         evpn_mgr = EvpnManager(arista)
-        vrf = Vrf(name="DEMO_VRF", rd="10.1.1.1:999", rt_import=["65001:999"], rt_export=["65001:999"])
+        vrf = Vrf(
+            name="DEMO_VRF",
+            rd="10.1.1.1:999",
+            rt_import=["65001:999"],
+            rt_export=["65001:999"],
+        )
         service = EvpnService(vlan_id=999, vni=99999, vrf_name="DEMO_VRF", s_tag=100)
-        
+
         logger.info("Generating EVPN configuration...")
         commands = evpn_mgr.deploy_service(service, vrf)
         for cmd in commands:
             logger.info(f"  CMD: {cmd}")
-            
+
         # Uncomment to actually apply
         # logger.info("Applying configuration...")
         # evpn_mgr.apply(commands)
-        
+
         arista.disconnect()
         logger.info("Disconnected from Arista")
 
@@ -91,6 +99,7 @@ def main():
 
     except Exception as e:
         logger.error(f"OcNOS Demo Failed: {e}")
+
 
 if __name__ == "__main__":
     main()

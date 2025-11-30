@@ -35,7 +35,7 @@ class TestLagManager:
 
         commands = manager.create_lag("Port-Channel1", ["Ethernet1", "Ethernet2"])
 
-        # Should migrate access VLAN  
+        # Should migrate access VLAN
         commands_str = "\n".join(commands)
         assert "100" in commands_str
         assert "interface Port-Channel1" in commands_str
@@ -43,7 +43,12 @@ class TestLagManager:
     def test_port_already_in_lag_raises_error(self):
         """Test that using a port already in a LAG raises ValueError."""
         initial_interfaces = [
-            Interface(name="Ethernet1", mode="trunk", trunk_vlans=[10], lag_member_of="Port-Channel99"),
+            Interface(
+                name="Ethernet1",
+                mode="trunk",
+                trunk_vlans=[10],
+                lag_member_of="Port-Channel99",
+            ),
             Interface(name="Ethernet2", mode="trunk", trunk_vlans=[20]),
         ]
         driver = MockDriver(initial_interfaces=initial_interfaces)
@@ -139,7 +144,9 @@ class TestLagManager:
         manager = LagManager(driver)
 
         # Test passive mode
-        commands = manager.create_lag("Port-Channel1", ["Ethernet1", "Ethernet2"], lacp_mode="passive")
+        commands = manager.create_lag(
+            "Port-Channel1", ["Ethernet1", "Ethernet2"], lacp_mode="passive"
+        )
         commands_str = "\n".join(commands)
         assert "channel-group 1 mode passive" in commands_str
 

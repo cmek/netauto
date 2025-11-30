@@ -16,7 +16,7 @@ class TestEvpnManager:
             name="PROD",
             rd="10.1.1.1:10010",
             rt_import=["65001:10010"],
-            rt_export=["65001:10010"]
+            rt_export=["65001:10010"],
         )
         service = EvpnService(vlan_id=10, vni=10010, vrf_name="PROD")
 
@@ -51,7 +51,7 @@ class TestEvpnManager:
             name="MULTI_RT",
             rd="10.1.1.1:20000",
             rt_import=["65001:20000", "65002:20000"],
-            rt_export=["65001:20000", "65003:20000"]
+            rt_export=["65001:20000", "65003:20000"],
         )
         service = EvpnService(vlan_id=20, vni=20000, vrf_name="MULTI_RT")
 
@@ -71,10 +71,20 @@ class TestEvpnManager:
         driver = MockDriver()
         manager = EvpnManager(driver)
 
-        vrf1 = Vrf(name="VRF1", rd="10.1.1.1:10", rt_import=["65001:10"], rt_export=["65001:10"])
+        vrf1 = Vrf(
+            name="VRF1",
+            rd="10.1.1.1:10",
+            rt_import=["65001:10"],
+            rt_export=["65001:10"],
+        )
         service1 = EvpnService(vlan_id=10, vni=10010, vrf_name="VRF1")
 
-        vrf2 = Vrf(name="VRF2", rd="10.1.1.1:20", rt_import=["65001:20"], rt_export=["65001:20"])
+        vrf2 = Vrf(
+            name="VRF2",
+            rd="10.1.1.1:20",
+            rt_import=["65001:20"],
+            rt_export=["65001:20"],
+        )
         service2 = EvpnService(vlan_id=20, vni=20020, vrf_name="VRF2")
 
         commands1 = manager.deploy_service(service1, vrf1)
@@ -95,7 +105,12 @@ class TestEvpnManager:
         driver = MockDriver()
         manager = EvpnManager(driver)
 
-        vrf = Vrf(name="TEST", rd="10.1.1.1:30", rt_import=["65001:30"], rt_export=["65001:30"])
+        vrf = Vrf(
+            name="TEST",
+            rd="10.1.1.1:30",
+            rt_import=["65001:30"],
+            rt_export=["65001:30"],
+        )
         service1 = EvpnService(vlan_id=100, vni=30010, vrf_name="TEST")
         service2 = EvpnService(vlan_id=100, vni=30020, vrf_name="TEST")
 
@@ -118,7 +133,7 @@ class TestEvpnManager:
             name="ASYMMETRIC",
             rd="10.1.1.1:40",
             rt_import=["65001:40", "65002:40"],
-            rt_export=["65001:40"]
+            rt_export=["65001:40"],
         )
         service = EvpnService(vlan_id=40, vni=40040, vrf_name="ASYMMETRIC")
 
@@ -139,8 +154,15 @@ class TestEvpnManager:
         driver = MockDriver()
         manager = EvpnManager(driver)
 
-        vrf = Vrf(name="MCAST", rd="10.1.1.1:50", rt_import=["65001:50"], rt_export=["65001:50"])
-        service = EvpnService(vlan_id=50, vni=50050, vrf_name="MCAST", mcast_group="239.1.1.1")
+        vrf = Vrf(
+            name="MCAST",
+            rd="10.1.1.1:50",
+            rt_import=["65001:50"],
+            rt_export=["65001:50"],
+        )
+        service = EvpnService(
+            vlan_id=50, vni=50050, vrf_name="MCAST", mcast_group="239.1.1.1"
+        )
 
         commands = manager.deploy_service(service, vrf)
 
@@ -154,7 +176,12 @@ class TestEvpnManager:
         driver = MockDriver()
         manager = EvpnManager(driver)
 
-        vrf = Vrf(name="APPLY_TEST", rd="10.1.1.1:60", rt_import=["65001:60"], rt_export=["65001:60"])
+        vrf = Vrf(
+            name="APPLY_TEST",
+            rd="10.1.1.1:60",
+            rt_import=["65001:60"],
+            rt_export=["65001:60"],
+        )
         service = EvpnService(vlan_id=60, vni=60060, vrf_name="APPLY_TEST")
 
         commands = manager.deploy_service(service, vrf)
@@ -169,7 +196,12 @@ class TestEvpnManager:
         driver = MockDriver()
         manager = EvpnManager(driver)
 
-        vrf = Vrf(name="ORDER", rd="10.1.1.1:70", rt_import=["65001:70"], rt_export=["65001:70"])
+        vrf = Vrf(
+            name="ORDER",
+            rd="10.1.1.1:70",
+            rt_import=["65001:70"],
+            rt_export=["65001:70"],
+        )
         service = EvpnService(vlan_id=70, vni=70070, vrf_name="ORDER")
 
         commands = manager.deploy_service(service, vrf)
@@ -186,14 +218,19 @@ class TestEvpnManager:
     def test_vni_conflict_detection(self):
         """Test that VNI conflicts are detected."""
         # Setup driver with existing VNI
-        initial_vnis = {
-            10010: {'vlan_id': 10}
-        }
+        initial_vnis = {10010: {"vlan_id": 10}}
         driver = MockDriver(initial_vnis=initial_vnis)
         manager = EvpnManager(driver)
 
-        vrf = Vrf(name="CONFLICT", rd="10.1.1.1:80", rt_import=["65001:80"], rt_export=["65001:80"])
-        service = EvpnService(vlan_id=80, vni=10010, vrf_name="CONFLICT")  # VNI 10010 already in use
+        vrf = Vrf(
+            name="CONFLICT",
+            rd="10.1.1.1:80",
+            rt_import=["65001:80"],
+            rt_export=["65001:80"],
+        )
+        service = EvpnService(
+            vlan_id=80, vni=10010, vrf_name="CONFLICT"
+        )  # VNI 10010 already in use
 
         with pytest.raises(ValueError, match="VNI 10010 is already in use"):
             manager.deploy_service(service, vrf)
@@ -201,21 +238,31 @@ class TestEvpnManager:
     def test_vni_no_conflict_with_different_vni(self):
         """Test that different VNIs don't conflict."""
         # Setup driver with existing VNI
-        initial_vnis = {
-            10010: {'vlan_id': 10}
-        }
+        initial_vnis = {10010: {"vlan_id": 10}}
         driver = MockDriver(initial_vnis=initial_vnis)
         manager = EvpnManager(driver)
 
-        vrf = Vrf(name="NO_CONFLICT", rd="10.1.1.1:90", rt_import=["65001:90"], rt_export=["65001:90"])
-        service = EvpnService(vlan_id=90, vni=20020, vrf_name="NO_CONFLICT")  # VNI 20020 is not in use
+        vrf = Vrf(
+            name="NO_CONFLICT",
+            rd="10.1.1.1:90",
+            rt_import=["65001:90"],
+            rt_export=["65001:90"],
+        )
+        service = EvpnService(
+            vlan_id=90, vni=20020, vrf_name="NO_CONFLICT"
+        )  # VNI 20020 is not in use
 
     def test_evpn_service_with_stag(self):
         """Test EVPN service with S-TAG."""
         driver = MockDriver()
         manager = EvpnManager(driver)
 
-        vrf = Vrf(name="STAG_TEST", rd="10.1.1.1:99", rt_import=["65001:99"], rt_export=["65001:99"])
+        vrf = Vrf(
+            name="STAG_TEST",
+            rd="10.1.1.1:99",
+            rt_import=["65001:99"],
+            rt_export=["65001:99"],
+        )
         service = EvpnService(vlan_id=99, vni=99099, vrf_name="STAG_TEST", s_tag=200)
 
         commands = manager.deploy_service(service, vrf)

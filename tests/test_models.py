@@ -74,7 +74,7 @@ class TestModels:
             name="PROD",
             rd="10.1.1.1:100",
             rt_import=["65001:100"],
-            rt_export=["65001:100"]
+            rt_export=["65001:100"],
         )
         assert vrf.name == "PROD"
         assert vrf.rd == "10.1.1.1:100"
@@ -87,14 +87,16 @@ class TestModels:
             name="MULTI",
             rd="10.1.1.1:200",
             rt_import=["65001:200", "65002:200"],
-            rt_export=["65001:200", "65003:200", "65004:200"]
+            rt_export=["65001:200", "65003:200", "65004:200"],
         )
         assert len(vrf.rt_import) == 2
         assert len(vrf.rt_export) == 3
 
     def test_bgp_model(self):
         """Test BGP model."""
-        bgp = Bgp(as_number=65001, router_id="10.1.1.1", neighbors=["10.1.1.2", "10.1.1.3"])
+        bgp = Bgp(
+            as_number=65001, router_id="10.1.1.1", neighbors=["10.1.1.2", "10.1.1.3"]
+        )
         assert bgp.as_number == 65001
         assert bgp.router_id == "10.1.1.1"
         assert len(bgp.neighbors) == 2
@@ -115,10 +117,7 @@ class TestModels:
     def test_evpn_service_with_mcast(self):
         """Test EVPN service with multicast group."""
         service = EvpnService(
-            vlan_id=200,
-            vni=20200,
-            vrf_name="MCAST_TEST",
-            mcast_group="239.1.1.1"
+            vlan_id=200, vni=20200, vrf_name="MCAST_TEST", mcast_group="239.1.1.1"
         )
         assert service.mcast_group == "239.1.1.1"
 

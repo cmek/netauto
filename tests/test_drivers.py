@@ -2,6 +2,7 @@ import pytest
 from netauto.models import Interface, Vlan
 from netauto.drivers import MockDriver, OcnosDriver
 
+
 class TestOcnosDriver:
     """Tests for the ocnos driver"""
 
@@ -16,6 +17,7 @@ class TestOcnosDriver:
         print(interfaces)
         assert "eth0" in interfaces
         assert "po10" in interfaces
+
 
 class TestMockDriver:
     """Test suite for MockDriver functionality."""
@@ -89,7 +91,12 @@ class TestMockDriver:
         driver.push_config(["command3", "command4"])
 
         assert len(driver.pushed_commands) == 4
-        assert driver.pushed_commands == ["command1", "command2", "command3", "command4"]
+        assert driver.pushed_commands == [
+            "command1",
+            "command2",
+            "command3",
+            "command4",
+        ]
 
     def test_connect_disconnect(self):
         """Test connect and disconnect methods."""

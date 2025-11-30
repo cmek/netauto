@@ -3,12 +3,15 @@ from .models import EvpnService, Vrf
 from .drivers import DeviceDriver
 from .renderer import TemplateRenderer
 
+
 class EvpnManager:
     def __init__(self, driver: DeviceDriver):
         self.driver = driver
         self.renderer = TemplateRenderer()
 
-    def deploy_service(self, service: EvpnService, vrf: Vrf, bgp_as: int = 65001) -> List[str]:
+    def deploy_service(
+        self, service: EvpnService, vrf: Vrf, bgp_as: int = 65001
+    ) -> List[str]:
         """
         Generates configuration to deploy an EVPN service using templates.
         Validates that the VNI is not already in use.
@@ -23,16 +26,16 @@ class EvpnManager:
 
         # Prepare context for template
         context = {
-            'vlan_id': service.vlan_id,
-            'vni': service.vni,
-            's_tag': service.s_tag,
-            'vrf': {
-                'name': vrf.name,
-                'rd': vrf.rd,
-                'rt_import': vrf.rt_import,
-                'rt_export': vrf.rt_export
+            "vlan_id": service.vlan_id,
+            "vni": service.vni,
+            "s_tag": service.s_tag,
+            "vrf": {
+                "name": vrf.name,
+                "rd": vrf.rd,
+                "rt_import": vrf.rt_import,
+                "rt_export": vrf.rt_export,
             },
-            'bgp_as': bgp_as
+            "bgp_as": bgp_as,
         }
 
         # Render configuration using template
@@ -40,16 +43,18 @@ class EvpnManager:
 
         return commands
 
-    def delete_service(self, service: EvpnService, vrf_name: str, bgp_as: int = 65001) -> List[str]:
+    def delete_service(
+        self, service: EvpnService, vrf_name: str, bgp_as: int = 65001
+    ) -> List[str]:
         """
         Generates configuration to delete an EVPN service using templates.
         """
         # Prepare context for template
         context = {
-            'vlan_id': service.vlan_id,
-            'vni': service.vni,
-            'vrf_name': vrf_name,
-            'bgp_as': bgp_as
+            "vlan_id": service.vlan_id,
+            "vni": service.vni,
+            "vrf_name": vrf_name,
+            "bgp_as": bgp_as,
         }
 
         # Render delete configuration using template
