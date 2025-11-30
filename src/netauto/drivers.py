@@ -3,6 +3,7 @@ from typing import List, Dict, Any
 from .models import Interface, Vlan
 import logging
 
+import pyeapi
 from scrapli_netconf.driver import NetconfDriver as ScrapliNetconfDriver
 import jsonrpclib
 import xml.etree.ElementTree as ET
@@ -95,12 +96,14 @@ class MockDriver(DeviceDriver):
 
 
 class AristaDriver(DeviceDriver):
-    def __init__(self, host: str, user: str, password: str):
+    def __init__(
+        self, host: str, user: str, password: str, enable_password: str | None = None
+    ):
         self.host = host
         self.user = user
         self.password = password
-        self.url = f"http://{user}:{password}@{host}/command-api"
-        self.server = jsonrpclib.Server(self.url)
+        self.enable_password = enable_password
+        self.node = None
 
     @property
     def platform(self) -> str:
@@ -111,10 +114,16 @@ class AristaDriver(DeviceDriver):
         return "Port-Channel"
 
     def connect(self):
-        # eAPI is stateless, but we can verify connectivity
-        # We'll do a simple ping command or version check
         try:
-            self.server.runCmds(1, ["show version"])
+            self.node = pyeapi.connect(
+                transport="http",
+                host=self.host,
+                username=self.user,
+                password=self.password,
+                return_node=True,
+            )
+            if self.enable_password is not None:
+                self.node.enable_authentication(self.enable_password)
         except Exception as e:
             logging.error(f"Failed to connect to Arista eAPI: {e}")
             raise
@@ -129,41 +138,40 @@ class AristaDriver(DeviceDriver):
         """
         # Get base interface info
         try:
-            response = self.server.runCmds(
-                1, ["show interfaces", "show interfaces switchport"]
-            )
-            data = response[0]
-            data_sw = response[1]
+            response = self.node.enable("show interfaces")
+            data = response[0].get("result", {})
+            print(data)
         except Exception as e:
             logging.error(f"Failed to retrieve interfaces: {e}")
             return {}
 
-        switchports = data_sw.get("switchports", {})
+        # switchports = data_sw.get("switchports", {})
 
         interfaces = {}
         for name, intf_data in data.get("interfaces", {}).items():
+            print(name)
             mode = "routed"
             trunk_vlans = []
             access_vlan = None
 
             # Check if it has switchport info
-            if name in switchports:
-                sw_data = switchports[name]
-                sw_info = sw_data.get("switchportInfo", {})
-
-                if sw_info.get("mode") == "trunk":
-                    mode = "trunk"
-                    vlans_str = sw_info.get("trunkAllowedVlans", "")
-                    if vlans_str and vlans_str != "ALL":
-                        try:
-                            trunk_vlans = [
-                                int(v) for v in vlans_str.split(",") if v.isdigit()
-                            ]
-                        except ValueError:
-                            pass
-                elif sw_info.get("mode") == "access":
-                    mode = "access"
-                    access_vlan = sw_info.get("accessVlanId")
+            #            if name in switchports:
+            #                sw_data = switchports[name]
+            #                sw_info = sw_data.get("switchportInfo", {})
+            #
+            #                if sw_info.get("mode") == "trunk":
+            #                    mode = "trunk"
+            #                    vlans_str = sw_info.get("trunkAllowedVlans", "")
+            #                    if vlans_str and vlans_str != "ALL":
+            #                        try:
+            #                            trunk_vlans = [
+            #                                int(v) for v in vlans_str.split(",") if v.isdigit()
+            #                            ]
+            #                        except ValueError:
+            #                            pass
+            #                elif sw_info.get("mode") == "access":
+            #                    mode = "access"
+            #                    access_vlan = sw_info.get("accessVlanId")
 
             interfaces[name] = Interface(
                 name=name, mode=mode, trunk_vlans=trunk_vlans, access_vlan=access_vlan
@@ -173,7 +181,7 @@ class AristaDriver(DeviceDriver):
 
     def get_vlans(self) -> Dict[int, Vlan]:
         try:
-            response = self.server.runCmds(1, ["show vlan"])
+            response = self.node.enable({"cmd": "show vlan"})
             data = response[0]
         except Exception as e:
             logging.error(f"Failed to retrieve VLANs: {e}")
@@ -189,7 +197,7 @@ class AristaDriver(DeviceDriver):
 
     def get_vnis(self) -> Dict[int, Dict[str, Any]]:
         try:
-            response = self.server.runCmds(1, ["show vxlan vni"])
+            response = self.node.enable({"cmd": "show vxlan vni"})
             data = response[0]
         except Exception as e:
             logging.error(f"Failed to retrieve VNIs: {e}")
@@ -208,7 +216,7 @@ class AristaDriver(DeviceDriver):
 
     def push_config(self, commands: List[str]):
         try:
-            self.server.runCmds(1, ["configure"] + commands)
+            self.node.config(commands)
         except Exception as e:
             logging.error(f"Failed to push config: {e}")
             raise

@@ -12,6 +12,7 @@ dependencies = [
     "jsonrpclib>=0.2.1",
     "paramiko>=4.0.0",
     "pydantic>=2.12.4",
+    "pyeapi>=1.0.4",
     "scrapli>=2025.1.30",
     "scrapli-community>=2025.1.30",
     "scrapli-netconf>=2025.1.30",
