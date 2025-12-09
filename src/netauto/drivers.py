@@ -1,12 +1,14 @@
-from abc import ABC, abstractmethod
-from typing import List, Dict, Any
-from .models import Interface, Vlan
 import logging
+import xml.etree.ElementTree as ET
+from abc import ABC, abstractmethod
+from typing import Any, Dict, List
 
 import pyeapi
 from scrapli_netconf.driver import NetconfDriver as ScrapliNetconfDriver
-import jsonrpclib
-import xml.etree.ElementTree as ET
+
+from .models import Interface, Vlan
+
+logger = logging.getLogger(__name__)
 
 
 class DeviceDriver(ABC):
@@ -46,8 +48,16 @@ class DeviceDriver(ABC):
         pass
 
     @abstractmethod
-    def push_config(self, commands: List[str]):
-        """Pushes a list of configuration commands to the device."""
+    def push_config(self, commands: List[str], dry_run: bool = False) -> str:
+        """Pushes a list of configuration commands to the device.
+
+        Args:
+            commands (List[str]): List of configuration commands to push.
+            dry_run (bool): If True, do not commit changes, just simulate.
+
+        Returns:
+            str: The configuration diff after applying the commands. Or the intended changes in dry-run mode.
+        """
         pass
 
 
@@ -125,7 +135,7 @@ class AristaDriver(DeviceDriver):
             if self.enable_password is not None:
                 self.node.enable_authentication(self.enable_password)
         except Exception as e:
-            logging.error(f"Failed to connect to Arista eAPI: {e}")
+            logger.error(f"Failed to connect to Arista eAPI: {e}")
             raise
 
     def disconnect(self):
@@ -142,7 +152,7 @@ class AristaDriver(DeviceDriver):
             data = response[0].get("result", {})
             print(data)
         except Exception as e:
-            logging.error(f"Failed to retrieve interfaces: {e}")
+            logger.error(f"Failed to retrieve interfaces: {e}")
             return {}
 
         # switchports = data_sw.get("switchports", {})
@@ -184,7 +194,7 @@ class AristaDriver(DeviceDriver):
             response = self.node.enable({"cmd": "show vlan"})
             data = response[0]
         except Exception as e:
-            logging.error(f"Failed to retrieve VLANs: {e}")
+            logger.error(f"Failed to retrieve VLANs: {e}")
             return {}
 
         vlans = {}
@@ -200,7 +210,7 @@ class AristaDriver(DeviceDriver):
             response = self.node.enable({"cmd": "show vxlan vni"})
             data = response[0]
         except Exception as e:
-            logging.error(f"Failed to retrieve VNIs: {e}")
+            logger.error(f"Failed to retrieve VNIs: {e}")
             return {}
 
         vnis = {}
@@ -214,12 +224,37 @@ class AristaDriver(DeviceDriver):
 
         return vnis
 
-    def push_config(self, commands: List[str]):
+    def push_config(self, commands: List[str], dry_run: bool = False):
+        self.node.configure_session()
+        logger.info(f"started config session {self.node._session_name} on {self.host}")
         try:
             self.node.config(commands)
+            logger.info(
+                f"sending config commands to session {self.node._session_name} on {self.host}:\n{commands}"
+            )
+            diff = self.node.diff()
+            logger.info(
+                f"config diff for session {self.node._session_name} on {self.host}:\n{diff}"
+            )
         except Exception as e:
-            logging.error(f"Failed to push config: {e}")
+            logger.error(
+                f"Failed to push config commands: {e}. Aborting session {self.node._session_name}"
+            )
+            self.node.abort()
             raise
+
+        if dry_run:
+            logger.info(
+                f"dry run enabled, aborting config session {self.node._session_name} on {self.host}"
+            )
+            self.node.abort()
+        else:
+            logger.info(
+                f"committing config session {self.node._session_name} on {self.host}"
+            )
+            self.node.commit()
+
+        return diff
 
 
 class OcnosDriver(DeviceDriver):
@@ -269,7 +304,7 @@ class OcnosDriver(DeviceDriver):
             for intf in root.findall(f".//{namespace}:interface", ns):
                 name = intf.find(f"{namespace}:name", ns).text
                 if name is None:
-                    logging.info(f"couldn't find name for interface {intf}, skipping")
+                    logger.info(f"couldn't find name for interface {intf}, skipping")
                     continue
 
                 # Determine mode and VLANs
@@ -300,7 +335,7 @@ class OcnosDriver(DeviceDriver):
         try:
             return self.conn.get_config()
         except Exception as e:
-            logging.error(f"Failed to get configuration: {e}")
+            logger.error(f"Failed to get configuration: {e}")
             return ""
 
     def get_interfaces(self) -> Dict[str, Interface]:
@@ -325,7 +360,7 @@ class OcnosDriver(DeviceDriver):
             interfaces = self._extract_interfaces(response.result)
             return interfaces
         except Exception as e:
-            logging.error(f"Failed to get interfaces: {e}")
+            logger.error(f"Failed to get interfaces: {e}")
             return {}
 
     def get_vlans(self) -> Dict[int, Vlan]:
@@ -351,7 +386,7 @@ class OcnosDriver(DeviceDriver):
                     vlans[vlan_id] = Vlan(vlan_id=vlan_id, name=name)
             return vlans
         except Exception as e:
-            logging.error(f"Failed to get VLANs: {e}")
+            logger.error(f"Failed to get VLANs: {e}")
             return {}
 
     def get_vnis(self) -> Dict[int, Dict[str, Any]]:
@@ -382,7 +417,7 @@ class OcnosDriver(DeviceDriver):
                     vnis[vni] = {"vlan_id": vlan_id}
             return vnis
         except Exception as e:
-            logging.error(f"Failed to get VNIs: {e}")
+            logger.error(f"Failed to get VNIs: {e}")
             return {}
 
     def push_config(self, commands: List[str]):
@@ -395,15 +430,15 @@ class OcnosDriver(DeviceDriver):
             # cmd is the XML payload
             try:
                 response = self.conn.lock(target="candidate")
-                logging.info(f"locking response: {response.result}")
+                logger.info(f"locking response: {response.result}")
                 response = self.conn.edit_config(config=cmd, target="candidate")
-                logging.info(f"edit_config response: {response.result}")
+                logger.info(f"edit_config response: {response.result}")
                 response = self.conn.commit()
 
                 # XXX check for responses so far and run discard() and unlock
 
-                logging.info(f"commit response: {response.result}")
+                logger.info(f"commit response: {response.result}")
                 self.conn.unlock(target="candidate")
             except Exception as e:
-                logging.error(f"Failed to push config: {e}")
+                logger.error(f"Failed to push config: {e}")
                 raise
