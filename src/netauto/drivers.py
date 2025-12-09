@@ -1,12 +1,11 @@
-import logging
-import xml.etree.ElementTree as ET
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List
+from typing import List, Dict, Any
+from .models import Interface, Vlan
+import logging
 
 import pyeapi
 from scrapli_netconf.driver import NetconfDriver as ScrapliNetconfDriver
-
-from .models import Interface, Vlan
+import xml.etree.ElementTree as ET
 
 logger = logging.getLogger(__name__)
 
@@ -253,6 +252,8 @@ class AristaDriver(DeviceDriver):
                 f"committing config session {self.node._session_name} on {self.host}"
             )
             self.node.commit()
+            # save the running-config
+            self.node.enable("copy running-config startup-config")
 
         return diff
 
