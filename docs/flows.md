@@ -1,5 +1,5 @@
 
-Arista push_config Flowchart
+### Arista push_config flowchart
 
 ```mermaid
 flowchart TD
@@ -17,4 +17,25 @@ flowchart TD
     I --> J[Return the configuration diff to the caller]
 ```
 
+### OCNOS push_config flowchart
 
+```mermaid
+flowchart TD
+    A[push_config commands, dry_run] --> B[Retrieve running configuration]
+    B --> C[Lock candidate configuration]
+    C --> D{Attempt to apply candidate configuration}    
+    
+    D -->|Error while applying config| F[Discard changes to the candidate config]
+    F --> G[Unlock candidate config]
+    G --> H[Propagate errors]
+
+    D --> N[Retrieve candidate configuration]
+    N --> R[Calculate config diff]
+
+    R --> I{Is this a dry run?}
+    I -->|yes| J[Discard all candidate changes without saving]
+    I -->|no| K[Commit candidate configuration]
+    K --> M[Unlock candidate config]
+    M --> O[Return configuration diff]
+    J --> M
+```

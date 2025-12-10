@@ -2,10 +2,12 @@ from abc import ABC, abstractmethod
 from typing import List, Dict, Any
 from .models import Interface, Vlan
 import logging
+import difflib
 
 import pyeapi
 from scrapli_netconf.driver import NetconfDriver as ScrapliNetconfDriver
 import xml.etree.ElementTree as ET
+from lxml import etree
 
 logger = logging.getLogger(__name__)
 
@@ -421,25 +423,83 @@ class OcnosDriver(DeviceDriver):
             logger.error(f"Failed to get VNIs: {e}")
             return {}
 
-    def push_config(self, commands: List[str]):
+    def _normalize_xml(self, xml_str: str) -> str:
+        """
+        Normalizes XML string for comparison by removing insignificant whitespace.
+        """
+        # fix Ocnos bug:
+        xml_str = xml_str.replace(
+            "urn:ietf:params:xml:n s:yang:ietf-netconf-acm",
+            "urn:ietf:params:xml:ns:yang:ietf-netconf-acm",
+        )
+        parser = etree.XMLParser(remove_blank_text=True)
+        tree = etree.fromstring(xml_str.encode(), parser)
+        return etree.tostring(tree, pretty_print=True).decode()
+
+    def _compute_diff(self, running_cfg: str, candidate_cfg: str) -> str:
+        normalized_running = self._normalize_xml(running_cfg)
+        normalized_candidate = self._normalize_xml(candidate_cfg)
+        running_lines = normalized_running.splitlines(keepends=True)
+        candidate_lines = normalized_candidate.splitlines(keepends=True)
+        diff_lines = difflib.unified_diff(
+            running_lines,
+            candidate_lines,
+            fromfile="running-config",
+            tofile="candidate-config",
+        )
+        return "".join(diff_lines)
+
+    def push_config(self, commands: List[str], dry_run: bool = False) -> str:
         """
         Pushes configuration to OcNOS.
         For Netconf, 'commands' is expected to be a list containing a single XML string
         (since our renderer now returns [xml_string]).
         """
-        for cmd in commands:
-            # cmd is the XML payload
-            try:
-                response = self.conn.lock(target="candidate")
-                logger.info(f"locking response: {response.result}")
-                response = self.conn.edit_config(config=cmd, target="candidate")
-                logger.info(f"edit_config response: {response.result}")
+        try:
+            logger.info(f"retrieved running config from {self.conn.host}")
+            running_cfg = self.conn.get_config(source="running")
+
+            logger.info(f"locking candidate config on {self.conn.host}")
+            self.conn.lock(target="candidate")
+
+            for cmd in commands:
+                logger.info(f"applying config to candidate on {self.conn.host}:\n{cmd}")
+                resp = self.conn.edit_config(config=cmd, target="candidate")
+                resp.raise_for_status()
+
+            candidate_cfg = self.conn.get_config(source="candidate")
+
+            # OCNOS produces all sorts of broken XML:
+            # - spaces in namespace URIs
+            #  <nacm xmlns="urn:ietf:params:xml:n s:yang:ietf-netconf-acm">
+            #    </nacm>
+            # - randomly quoted tags:
+            # <safi>unicast
+            #   /safi&gt;
+            #    <activate/>
+            #  </safi>
+            #       <config><afi>l2vpn</afi><safi>evpn</safi><activate/>
+            # /config&gt;
+            #       </config>
+
+            # So for now we'll just compute a text diff instead of XML diff
+            # diff = xmldiff.diff_trees(etree.fromstring(running_cfg.result.replace("urn:ietf:params:xml:n s:yang:ietf-netconf-acm", "urn:ietf:params:xml:ns:yang:ietf-netconf-acm")), etree.fromstring(candidate_cfg.result.replace("urn:ietf:params:xml:n s:yang:ietf-netconf-acm", "urn:ietf:params:xml:ns:yang:ietf-netconf-acm")))
+
+            diff = self._compute_diff(running_cfg.result, candidate_cfg.result)
+            logger.info(f"computed config diff on {self.conn.host}:\n{diff}")
+            if dry_run:
+                logger.info(f"dry run enabled, discarding changes on {self.conn.host}")
+                self.conn.discard()
+                return diff
+            else:
                 response = self.conn.commit()
-
-                # XXX check for responses so far and run discard() and unlock
-
-                logger.info(f"commit response: {response.result}")
-                self.conn.unlock(target="candidate")
-            except Exception as e:
-                logger.error(f"Failed to push config: {e}")
-                raise
+                response.raise_for_status()
+            self.conn.unlock(target="candidate")
+            return diff
+        except Exception as e:
+            logger.error(
+                f"Failed to push config commands: {e}. Discarding changes on {self.conn.host}"
+            )
+            self.conn.discard()
+            self.conn.unlock(target="candidate")
+            raise
