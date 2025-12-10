@@ -11,10 +11,11 @@ flowchart TD
 
     E --> G{Is this a dry run?}
     G -->|yes| H[Discard all candidate changes without saving]
-    G -->|no| I[Confirm and apply the candidate changes to running config\nThen save running config so it persists across reboots]
+    G -->|no| I[Confirm and apply the candidate changes to running config]
+    I --> K[Save running config so it persists across reboots]
 
     H --> J[Return the configuration diff to the caller]
-    I --> J[Return the configuration diff to the caller]
+    K --> J[Return the configuration diff to the caller]
 ```
 
 ### OCNOS push_config flowchart
@@ -37,6 +38,7 @@ flowchart TD
     I -->|yes| J[Discard all candidate changes without saving]
     I -->|no| K[Commit candidate configuration]
     K --> M[Unlock candidate config]
-    M --> O[Return configuration diff]
+    M --> U[Save running config so it persists across reboots]
+    U --> O[Return configuration diff]
     J --> M
 ```
