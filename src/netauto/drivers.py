@@ -460,7 +460,8 @@ class OcnosDriver(DeviceDriver):
             running_cfg = self.conn.get_config(source="running")
 
             logger.info(f"locking candidate config on {self.conn.host}")
-            self.conn.lock(target="candidate")
+            resp = self.conn.lock(target="candidate")
+            resp.raise_for_status()
 
             for cmd in commands:
                 logger.info(f"applying config to candidate on {self.conn.host}:\n{cmd}")

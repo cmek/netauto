@@ -24,6 +24,7 @@ flowchart TD
     A[push_config commands, dry_run] --> B[Retrieve running configuration]
     B --> C[Lock candidate configuration]
     C --> D{Attempt to apply candidate configuration}    
+    C --> [Failed to lock candidate config] H
     
     D -->|Error while applying config| F[Discard changes to the candidate config]
     F --> G[Unlock candidate config]
