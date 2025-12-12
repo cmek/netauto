@@ -151,7 +151,6 @@ class AristaDriver(DeviceDriver):
         try:
             response = self.node.enable("show interfaces")
             data = response[0].get("result", {})
-            print(data)
         except Exception as e:
             logger.error(f"Failed to retrieve interfaces: {e}")
             return {}
@@ -295,7 +294,7 @@ class OcnosDriver(DeviceDriver):
             "nc": "urn:ietf:params:xml:ns:netconf:base:1.0",
         }
 
-        interfaces = {}
+        interfaces = []
 
         ## work around bug (or a feature??) of OCNOS where some of the interfaces
         # are not returned under the <interfaces> tag but instead they appear
@@ -323,11 +322,13 @@ class OcnosDriver(DeviceDriver):
                 # For now, we'll default to routed unless we see specific L2 indicators
                 # This is a placeholder for actual YANG parsing logic
 
-                interfaces[name] = Interface(
-                    name=name,
-                    mode=mode,
-                    trunk_vlans=trunk_vlans,
-                    access_vlan=access_vlan,
+                interfaces.append(
+                    Interface(
+                        name=name,
+                        mode=mode,
+                        trunk_vlans=trunk_vlans,
+                        access_vlan=access_vlan,
+                    )
                 )
         return interfaces
 
@@ -357,14 +358,13 @@ class OcnosDriver(DeviceDriver):
         """
         try:
             response = self.conn.get(filter_=filter_)
-            if not response.result:
-                return {}
+            response.raise_for_status()
 
             interfaces = self._extract_interfaces(response.result)
             return interfaces
         except Exception as e:
             logger.error(f"Failed to get interfaces: {e}")
-            return {}
+            raise
 
     def get_vlans(self) -> Dict[int, Vlan]:
         filter_ = """
@@ -495,6 +495,9 @@ class OcnosDriver(DeviceDriver):
             else:
                 response = self.conn.commit()
                 response.raise_for_status()
+            # XXX this does nothing
+            r = self.conn.copy_config(source="running", target="startup")
+            r.raise_for_status()
             self.conn.unlock(target="candidate")
             return diff
         except Exception as e:
