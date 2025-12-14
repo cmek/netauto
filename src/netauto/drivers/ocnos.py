@@ -73,9 +73,6 @@ class OcnosDriver(DeviceDriver):
         extracts interfaces from the xml response
         """
         ## another bug in OcNOS...
-        interfaces_data = interfaces_data.replace(
-            "ipi-if-ext ended", "ipi-if-extended"
-        ).replace("ipi-if-ex tended", "ipi-if-extended")
         interfaces_data = self._fix_ocnos_xml(interfaces_data)
         root = etree.fromstring(interfaces_data)
 
