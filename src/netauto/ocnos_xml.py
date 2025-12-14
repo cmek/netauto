@@ -4,45 +4,6 @@ from typing import List, Dict, Any, Optional
 from .models import Interface, Lag
 
 
-def is_rpc_reply_ok(xml_string):
-    root = ET.fromstring(xml_string)
-    # Check for <rpc-error> element
-    if root.find(".//{*}rpc-error") is not None:
-        return False
-    # Check for <ok> element
-    if root.find(".//{*}ok") is not None:
-        return True
-    return False
-
-
-def extract_rpc_error_info(xml_string):
-    root = ET.fromstring(xml_string)
-    error_elem = root.find(".//{*}rpc-error")
-    if error_elem is None:
-        return None  # No error found
-
-    error_info = {}
-    for tag in [
-        "error-type",
-        "error-tag",
-        "error-severity",
-        "error-app-tag",
-        "error-path",
-        "error-message",
-    ]:
-        elem = error_elem.find(f".//{{*}}{tag}")
-        if elem is not None:
-            error_info[tag] = elem.text
-
-    # Extract <error-info> subfields if present
-    error_info_elem = error_elem.find(".//{*}error-info")
-    if error_info_elem is not None:
-        for child in error_info_elem:
-            error_info[child.tag.split("}", 1)[-1]] = child.text
-
-    return error_info
-
-
 def _create_config_base() -> ET.Element:
     """Creates the base <config> element."""
     return ET.Element("config")
@@ -54,22 +15,6 @@ def _tostring(element: ET.Element) -> str:
     # this is not the most efficient approach ;)
     parsed = xml.dom.minidom.parseString(raw)
     return parsed.toprettyxml(indent="  ")
-
-
-def build_interface_config(interface: Interface) -> str:
-    config = _create_config_base()
-
-    interfaces = ET.SubElement(
-        config, "interfaces", xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-interface"
-    )
-
-    intf = ET.SubElement(interfaces, "interface")
-    ET.SubElement(intf, "name").text = interface.name
-    intf_config = ET.SubElement(intf, "config")
-    ET.SubElement(intf_config, "mtu").text = str(interface.mtu)
-    ET.SubElement(intf_config, "description").text = interface.description
-
-    return _tostring(config)
 
 
 def build_lag_config(

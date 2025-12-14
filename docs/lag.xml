@@ -1,0 +1,116 @@
+<interface xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-interface">
+        <name>po1</name>
+        <config>
+          <name>po1</name>
+          <enable-switchport/>
+          <mtu>1500</mtu>
+          <description>test9494</description>
+        </config>
+        <state>
+          <name>po1</name>
+          <enable-switchport/>
+          <mtu>1500</mtu>
+          <description>test9494</description>
+          <ifindex>7</ifindex>
+          <admin-status>up</admin-status>
+          <oper-status>down</oper-status>
+          <last-change>165646800</last-change>
+          <logical>false</logical>
+          <counters>
+            <in-octets>0</in-octets>
+            <in-pkts>0</in-pkts>
+            <in-multicast-pkts>0</in-multicast-pkts>
+            <in-discards>0</in-discards>
+            <in-errors>0</in-errors>
+            <out-octets>0</out-octets>
+            <out-pkts>0</out-pkts>
+            <out-discards>0</out-discards>
+            <out-errors>0</out-errors>
+            <last-clear>2025 Dec 13 21:09:45 (00:09:25 ago)</last-clear>
+            <extended-counters xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-if-extended">
+              <in-compressed>0</in-compressed>
+              <out-compressed>0</out-compressed>
+              <collisions>0</collisions>
+              <unicast-rpf-discard>0</unicast-rpf-discard>
+              <in-length-errors>0</in-length-errors>
+              <in-oversize-errors>0</in-oversize-errors>
+              <in-crc-errors>0</in-crc-errors>
+              <in-frame-errors>0</in-frame-errors>
+              <in-fifo-errors>0</in-fifo-errors>
+              <in-missed-errors>0</in-missed-errors>
+              <out-aborted-errors>0</out-aborted-errors>
+              <out-carrier-errors>0</out-carrier-errors>
+              <out-fifo-errors>0</out-fifo-errors>
+              <out-heartbeat-errors>0</out-heartbeat-errors>
+              <out-window-errors>0</out-window-errors>
+            </extended-counters>
+          </counters>
+          <custom-state xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-if-extended">
+            <current-bandwidth>0</current-bandwidth>
+          </custom-state>
+        </state>
+        <ethernet xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-if-ethernet">
+          <state>
+            <hw-mac-address>0c00.8409.d203</hw-mac-address>
+            <negotiated-duplex-mode>full</negotiated-duplex-mode>
+            <negotiated-port-speed>auto</negotiated-port-speed>
+            <counters>
+              <in-mac-pause-frames>0</in-mac-pause-frames>
+              <out-mac-pause-frames>0</out-mac-pause-frames>
+            </counters>
+          </state>
+          <extended-ethernet xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-if-extended">
+            <state>
+              <default-duplex-mode>0</default-duplex-mode>
+              <default-speed>1g</default-speed>
+            </state>
+          </extended-ethernet>
+          <storm-control xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-if-extended">
+            <broadcast>
+              <state>
+                <bcast-discards>0</bcast-discards>
+              </state>
+            </broadcast>
+            <multicast>
+              <state>
+                <mcast-discards>0</mcast-discards>
+              </state>
+            </multicast>
+            <dlf-broadcast>
+              <state>
+                <dlf-bcast-discards>0</dlf-bcast-discards>
+              </state>
+            </dlf-broadcast>
+          </storm-control>
+        </ethernet>
+        <ipv4 xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-if-ip">
+          <state>
+            <ipv4-enabled-status>true</ipv4-enabled-status>
+          </state>
+        </ipv4>
+        <ipv6 xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-if-ip">
+          <state>
+            <forwarding-status>false</forwarding-status>
+          </state>
+        </ipv6>
+        <extended xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-if-extended">
+          <state>
+            <properties>interface_active</properties>
+            <if-counter-discontinuity-time>0</if-counter-discontinuity-time>
+            <slot-id>0</slot-id>
+            <hardware-type>AGG</hardware-type>
+            <metric>1</metric>
+            <if-type>Switch</if-type>
+            <trust-state>none</trust-state>
+            <udld-flush-transmitted>0</udld-flush-transmitted>
+            <debounce-flap-count>0</debounce-flap-count>
+            <debounce-config-status>disable</debounce-config-status>
+            <last-flapped>Never</last-flapped>
+          </state>
+        </extended>
+        <aggregator xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-if-aggregate">
+          <state>
+            <agg-min-links-state>up</agg-min-links-state>
+          </state>
+        </aggregator>
+      </interface>

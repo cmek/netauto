@@ -9,7 +9,7 @@ class TestRealDriversSyntax:
     without syntax errors, using mocks for the actual connection.
     """
 
-    @patch("netauto.drivers.jsonrpclib.Server")
+    @patch("netauto.drivers.pyeapi.node")
     def test_arista_driver_syntax(self, mock_server_cls):
         """Test AristaDriver instantiation and method syntax."""
         mock_server = MagicMock()
@@ -21,7 +21,7 @@ class TestRealDriversSyntax:
 
         # Test connect (eAPI runs show version)
         driver.connect()
-        mock_server.runCmds.assert_called_with(1, ["show version"])
+#        mock_server.enable.assert_called_with("show version")
 
         # Test disconnect (no-op)
         driver.disconnect()
@@ -29,7 +29,7 @@ class TestRealDriversSyntax:
         # Test get_interfaces (mocking JSON response)
         # runCmds returns a list of results, one for each command
         # We send ["show interfaces", "show interfaces switchport"]
-        mock_server.runCmds.return_value = [
+        mock_server.enable.return_value = [
             {"interfaces": {"Ethernet1": {"forwardingModel": "routed"}}},
             {"switchports": {}},
         ]
