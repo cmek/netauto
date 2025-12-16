@@ -21,16 +21,16 @@ class TestOcnosDeviceRenderer:
         assert (
             xml
             == """<?xml version="1.0" ?>
-<config>
-  <interfaces xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-interface">
-    <interface>
-      <name>eth3</name>
-      <config>
-        <mtu>1500</mtu>
-        <description>test interface</description>
-      </config>
-    </interface>
-  </interfaces>
+<config xmlns:if="http://www.ipinfusion.com/yang/ocnos/ipi-interface">
+  <if:interfaces>
+    <if:interface>
+      <if:name>eth3</if:name>
+      <if:config>
+        <if:mtu>1500</if:mtu>
+        <if:description>test interface</if:description>
+      </if:config>
+    </if:interface>
+  </if:interfaces>
 </config>
 """
         )
@@ -52,37 +52,37 @@ class TestOcnosDeviceRenderer:
         assert (
             xml
             == """<?xml version="1.0" ?>
-<config>
-  <interfaces xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-interface">
-    <interface>
-      <name>eth3.30</name>
-      <config>
-        <mtu>1500</mtu>
-        <description>SO54321</description>
-        <name>eth3.30</name>
-        <enable-switchport/>
-      </config>
-      <extended xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-if-extended">
-        <subinterface-encapsulation>
-          <rewrite>
-            <config>
-              <vlan-action>pop</vlan-action>
-              <enable-pop>1tag</enable-pop>
-            </config>
-          </rewrite>
-          <single-tag-vlan-matches>
-            <single-tag-vlan-match>
-              <encapsulation-type>dot1q</encapsulation-type>
-              <config>
-                <encapsulation-type>dot1q</encapsulation-type>
-                <outer-vlan-id>30</outer-vlan-id>
-              </config>
-            </single-tag-vlan-match>
-          </single-tag-vlan-matches>
-        </subinterface-encapsulation>
-      </extended>
-    </interface>
-  </interfaces>
+<config xmlns:if="http://www.ipinfusion.com/yang/ocnos/ipi-interface" xmlns:ifext="http://www.ipinfusion.com/yang/ocnos/ipi-if-extended">
+  <if:interfaces>
+    <if:interface>
+      <if:name>eth3.30</if:name>
+      <if:config>
+        <if:mtu>1500</if:mtu>
+        <if:description>SO54321</if:description>
+        <if:name>eth3.30</if:name>
+        <if:enable-switchport/>
+      </if:config>
+      <ifext:extended>
+        <ifext:subinterface-encapsulation>
+          <ifext:rewrite>
+            <ifext:config>
+              <ifext:vlan-action>pop</ifext:vlan-action>
+              <ifext:enable-pop>1tag</ifext:enable-pop>
+            </ifext:config>
+          </ifext:rewrite>
+          <ifext:single-tag-vlan-matches>
+            <ifext:single-tag-vlan-match>
+              <ifext:encapsulation-type>dot1q</ifext:encapsulation-type>
+              <ifext:config>
+                <ifext:encapsulation-type>dot1q</ifext:encapsulation-type>
+                <ifext:outer-vlan-id>30</ifext:outer-vlan-id>
+              </ifext:config>
+            </ifext:single-tag-vlan-match>
+          </ifext:single-tag-vlan-matches>
+        </ifext:subinterface-encapsulation>
+      </ifext:extended>
+    </if:interface>
+  </if:interfaces>
 </config>
 """
         )
@@ -136,7 +136,7 @@ class TestOcnosDeviceRenderer:
         assert (
             xml
             == """<?xml version="1.0" ?>
-<config xmlns:bgpvrf="http://www.ipinfusion.com/yang/ocnos/ipi-bgp-vrf" xmlns:netinst="http://www.ipinfusion.com/yang/ocnos/ipi-network-instance" xmlns:vrf="http://www.ipinfusion.com/yang/ocnos/ipi-vrf">
+<config xmlns:bgpvrf="http://www.ipinfusion.com/yang/ocnos/ipi-bgp-vrf" xmlns:if="http://www.ipinfusion.com/yang/ocnos/ipi-interface" xmlns:ifext="http://www.ipinfusion.com/yang/ocnos/ipi-if-extended" xmlns:netinst="http://www.ipinfusion.com/yang/ocnos/ipi-network-instance" xmlns:vrf="http://www.ipinfusion.com/yang/ocnos/ipi-vrf">
   <netinst:network-instances>
     <netinst:network-instance>
       <netinst:instance-name>SO9999</netinst:instance-name>
@@ -166,36 +166,36 @@ class TestOcnosDeviceRenderer:
       </vrf:vrf>
     </netinst:network-instance>
   </netinst:network-instances>
-  <interfaces xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-interface">
-    <interface>
-      <name>eth3.30</name>
-      <config>
-        <mtu>1500</mtu>
-        <description>SO54321</description>
-        <name>eth3.30</name>
-        <enable-switchport/>
-      </config>
-      <extended xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-if-extended">
-        <subinterface-encapsulation>
-          <rewrite>
-            <config>
-              <vlan-action>pop</vlan-action>
-              <enable-pop>1tag</enable-pop>
-            </config>
-          </rewrite>
-          <single-tag-vlan-matches>
-            <single-tag-vlan-match>
-              <encapsulation-type>dot1q</encapsulation-type>
-              <config>
-                <encapsulation-type>dot1q</encapsulation-type>
-                <outer-vlan-id>30</outer-vlan-id>
-              </config>
-            </single-tag-vlan-match>
-          </single-tag-vlan-matches>
-        </subinterface-encapsulation>
-      </extended>
-    </interface>
-  </interfaces>
+  <if:interfaces>
+    <if:interface>
+      <if:name>eth3.30</if:name>
+      <if:config>
+        <if:mtu>1500</if:mtu>
+        <if:description>SO54321</if:description>
+        <if:name>eth3.30</if:name>
+        <if:enable-switchport/>
+      </if:config>
+      <ifext:extended>
+        <ifext:subinterface-encapsulation>
+          <ifext:rewrite>
+            <ifext:config>
+              <ifext:vlan-action>pop</ifext:vlan-action>
+              <ifext:enable-pop>1tag</ifext:enable-pop>
+            </ifext:config>
+          </ifext:rewrite>
+          <ifext:single-tag-vlan-matches>
+            <ifext:single-tag-vlan-match>
+              <ifext:encapsulation-type>dot1q</ifext:encapsulation-type>
+              <ifext:config>
+                <ifext:encapsulation-type>dot1q</ifext:encapsulation-type>
+                <ifext:outer-vlan-id>30</ifext:outer-vlan-id>
+              </ifext:config>
+            </ifext:single-tag-vlan-match>
+          </ifext:single-tag-vlan-matches>
+        </ifext:subinterface-encapsulation>
+      </ifext:extended>
+    </if:interface>
+  </if:interfaces>
 </config>
 """
         )

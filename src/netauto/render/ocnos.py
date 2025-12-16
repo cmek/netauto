@@ -1,11 +1,29 @@
 from .base import DeviceRenderer
 import xml.etree.ElementTree as ET
 import xml.dom.minidom
-from typing import List, Dict, Any, Optional
+from typing import List
 from netauto.models import Interface, Lag, Vlan, Evpn
 
 
 class OcnosDeviceRenderer(DeviceRenderer):
+    NS = {
+        "nc": "urn:ietf:params:xml:ns:netconf:base:1.0",
+        "if": "http://www.ipinfusion.com/yang/ocnos/ipi-interface",
+        "ifext": "http://www.ipinfusion.com/yang/ocnos/ipi-if-extended",
+        "vrf": "http://www.ipinfusion.com/yang/ocnos/ipi-vrf",
+        "bgpvrf": "http://www.ipinfusion.com/yang/ocnos/ipi-bgp-vrf",
+        "netinst": "http://www.ipinfusion.com/yang/ocnos/ipi-network-instance",
+    }
+
+    def __init__(self):
+        super().__init__()
+        for prefix, uri in self.NS.items():
+            ET.register_namespace(prefix, uri)
+
+    def _tag(self, prefix: str, tag: str) -> str:
+        """Helper to create namespaced tags."""
+        return f"{{{self.NS[prefix]}}}{tag}"
+
     def _tostring(self, element: ET.Element) -> str:
         """Converts an Element to a string."""
         raw = ET.tostring(element, encoding="unicode")
@@ -18,16 +36,14 @@ class OcnosDeviceRenderer(DeviceRenderer):
         return ET.Element("config")
 
     def _append_interface(self, root: ET.Element, interface: Interface) -> ET.Element:
-        interfaces = ET.SubElement(
-            root,
-            "interfaces",
-            xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-interface",
-        )
-        intf = ET.SubElement(interfaces, "interface")
-        ET.SubElement(intf, "name").text = interface.name
-        intf_config = ET.SubElement(intf, "config")
-        ET.SubElement(intf_config, "mtu").text = str(interface.mtu)
-        ET.SubElement(intf_config, "description").text = interface.description
+        interfaces = ET.SubElement(root, self._tag("if", "interfaces"))
+        intf = ET.SubElement(interfaces, self._tag("if", "interface"))
+        ET.SubElement(intf, self._tag("if", "name")).text = interface.name
+        intf_config = ET.SubElement(intf, self._tag("if", "config"))
+        ET.SubElement(intf_config, self._tag("if", "mtu")).text = str(interface.mtu)
+        ET.SubElement(
+            intf_config, self._tag("if", "description")
+        ).text = interface.description
 
         return root
 
@@ -62,28 +78,40 @@ class OcnosDeviceRenderer(DeviceRenderer):
             ),
         )
 
-        intf = interfaces.find(f".//interface[name='{interface.name}.{vlan.vlan_id}']")
-        intf_config = intf.find("config")
-        ET.SubElement(intf_config, "name").text = f"{interface.name}.{vlan.vlan_id}"
-        ET.SubElement(intf_config, "enable-switchport")
-
-        extended = ET.SubElement(
-            intf,
-            "extended",
-            xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-if-extended",
+        intf = interfaces.find(
+            f".//if:interface[if:name='{interface.name}.{vlan.vlan_id}']", self.NS
         )
-        subenc = ET.SubElement(extended, "subinterface-encapsulation")
-        rewrite = ET.SubElement(subenc, "rewrite")
-        rewrite_config = ET.SubElement(rewrite, "config")
-        ET.SubElement(rewrite_config, "vlan-action").text = "pop"
-        ET.SubElement(rewrite_config, "enable-pop").text = "1tag"
+        intf_config = intf.find(self._tag("if", "config"))
+        ET.SubElement(
+            intf_config, self._tag("if", "name")
+        ).text = f"{interface.name}.{vlan.vlan_id}"
+        ET.SubElement(intf_config, self._tag("if", "enable-switchport"))
 
-        singletag = ET.SubElement(subenc, "single-tag-vlan-matches")
-        singletagmatch = ET.SubElement(singletag, "single-tag-vlan-match")
-        ET.SubElement(singletagmatch, "encapsulation-type").text = "dot1q"
-        singletagmatch_config = ET.SubElement(singletagmatch, "config")
-        ET.SubElement(singletagmatch_config, "encapsulation-type").text = "dot1q"
-        ET.SubElement(singletagmatch_config, "outer-vlan-id").text = str(vlan.vlan_id)
+        extended = ET.SubElement(intf, self._tag("ifext", "extended"))
+        subenc = ET.SubElement(
+            extended, self._tag("ifext", "subinterface-encapsulation")
+        )
+        rewrite = ET.SubElement(subenc, self._tag("ifext", "rewrite"))
+        rewrite_config = ET.SubElement(rewrite, self._tag("ifext", "config"))
+        ET.SubElement(rewrite_config, self._tag("ifext", "vlan-action")).text = "pop"
+        ET.SubElement(rewrite_config, self._tag("ifext", "enable-pop")).text = "1tag"
+
+        singletag = ET.SubElement(subenc, self._tag("ifext", "single-tag-vlan-matches"))
+        singletagmatch = ET.SubElement(
+            singletag, self._tag("ifext", "single-tag-vlan-match")
+        )
+        ET.SubElement(
+            singletagmatch, self._tag("ifext", "encapsulation-type")
+        ).text = "dot1q"
+        singletagmatch_config = ET.SubElement(
+            singletagmatch, self._tag("ifext", "config")
+        )
+        ET.SubElement(
+            singletagmatch_config, self._tag("ifext", "encapsulation-type")
+        ).text = "dot1q"
+        ET.SubElement(
+            singletagmatch_config, self._tag("ifext", "outer-vlan-id")
+        ).text = str(vlan.vlan_id)
 
         return root
 
@@ -96,17 +124,13 @@ class OcnosDeviceRenderer(DeviceRenderer):
     def _append_vlan_delete(
         self, config: ET.Element, interface: Interface, vlan: Vlan
     ) -> ET.Element:
-        NS_NC = "urn:ietf:params:xml:ns:netconf:base:1.0"
-        NS_IF = "http://www.ipinfusion.com/yang/ocnos/ipi-interface"
-        ET.register_namespace("nc", NS_NC)
-        ET.register_namespace("if", NS_IF)
-        interfaces = ET.SubElement(config, f"{{{NS_IF}}}interfaces")
-        iface = ET.SubElement(interfaces, f"{{{NS_IF}}}interface")
-        iface.set(f"{{{NS_NC}}}operation", "delete")
+        interfaces = ET.SubElement(config, self._tag("if", "interfaces"))
+        iface = ET.SubElement(interfaces, self._tag("if", "interface"))
+        iface.set(self._tag("nc", "operation"), "delete")
         ET.SubElement(
-            iface, f"{{{NS_IF}}}name"
+            iface,
+            self._tag("if", "name"),
         ).text = f"{interface.name}.{vlan.vlan_id}"
-
         return config
 
     def render_vlan_delete(self, interface: Interface, vlan: Vlan) -> List[str]:
@@ -117,58 +141,49 @@ class OcnosDeviceRenderer(DeviceRenderer):
         return self._tostring(config)
 
     def _append_vrf(self, root: ET.Element, evpn: Evpn) -> ET.Element:
-        NS_NC = "urn:ietf:params:xml:ns:netconf:base:1.0"
-        NS_IF = "http://www.ipinfusion.com/yang/ocnos/ipi-interface"
-        NS_VRF = "http://www.ipinfusion.com/yang/ocnos/ipi-vrf"
-        NS_BGPVRF = "http://www.ipinfusion.com/yang/ocnos/ipi-bgp-vrf"
-        NS_NETINST = "http://www.ipinfusion.com/yang/ocnos/ipi-network-instance"
-        ET.register_namespace("nc", NS_NC)
-        ET.register_namespace("if", NS_IF)
-        ET.register_namespace("vrf", NS_VRF)
-        ET.register_namespace("bgpvrf", NS_BGPVRF)
-        ET.register_namespace("netinst", NS_NETINST)
-
         #      <network-instance>
         # <instance-name>so12345</instance-name>
         # <instance-type>mac-vrf</instance-type>
 
-        network_instances = ET.SubElement(root, f"{{{NS_NETINST}}}network-instances")
+        network_instances = ET.SubElement(
+            root, self._tag("netinst", "network-instances")
+        )
         network_instance = ET.SubElement(
-            network_instances, f"{{{NS_NETINST}}}network-instance"
+            network_instances, self._tag("netinst", "network-instance")
         )
         ET.SubElement(
-            network_instance, f"{{{NS_NETINST}}}instance-name"
+            network_instance, self._tag("netinst", "instance-name")
         ).text = evpn.description
         ET.SubElement(
-            network_instance, f"{{{NS_NETINST}}}instance-type"
+            network_instance, self._tag("netinst", "instance-type")
         ).text = "mac-vrf"
 
         # <config>
         #  <instance-name>so12345</instance-name>
         #  <instance-type>mac-vrf</instance-type>
         # </config>
+        config = ET.SubElement(network_instance, self._tag("netinst", "config"))
+        ET.SubElement(
+            config, self._tag("netinst", "instance-name")
+        ).text = evpn.description
+        ET.SubElement(config, self._tag("netinst", "instance-type")).text = "mac-vrf"
 
-        config = ET.SubElement(network_instance, f"{{{NS_NETINST}}}config")
-        ET.SubElement(config, f"{{{NS_NETINST}}}instance-name").text = evpn.description
-        ET.SubElement(config, f"{{{NS_NETINST}}}instance-type").text = "mac-vrf"
         #        <vrf xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-vrf">
         #          <config>
         #            <vrf-name>so12345</vrf-name>
         #          </config>
-
-        vrf = ET.SubElement(network_instance, f"{{{NS_VRF}}}vrf")
-        vrf_config = ET.SubElement(vrf, f"{{{NS_VRF}}}config")
-        ET.SubElement(vrf_config, f"{{{NS_VRF}}}vrf-name").text = evpn.description
+        vrf = ET.SubElement(network_instance, self._tag("vrf", "vrf"))
+        vrf_config = ET.SubElement(vrf, self._tag("vrf", "config"))
+        ET.SubElement(vrf_config, self._tag("vrf", "vrf-name")).text = evpn.description
 
         #          <bgp-vrf xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-bgp-vrf">
         #            <config>
         #              <rd-string>65511:99</rd-string>
         #            </config>
-
-        bgp_vrf = ET.SubElement(vrf, f"{{{NS_BGPVRF}}}bgp-vrf")
-        bgp_vrf_config = ET.SubElement(bgp_vrf, f"{{{NS_BGPVRF}}}config")
+        bgp_vrf = ET.SubElement(vrf, self._tag("bgpvrf", "bgp-vrf"))
+        bgp_vrf_config = ET.SubElement(bgp_vrf, self._tag("bgpvrf", "config"))
         ET.SubElement(
-            bgp_vrf_config, f"{{{NS_BGPVRF}}}rd-string"
+            bgp_vrf_config, self._tag("bgpvrf", "rd-string")
         ).text = f"{evpn.asn}:{evpn.vni}"
 
         #             <route-targets>
@@ -177,16 +192,18 @@ class OcnosDeviceRenderer(DeviceRenderer):
         #                 <config>
         #                   <rt-rd-string>37186:99</rt-rd-string>
         #                   <direction>import export</direction>
-        route_targets = ET.SubElement(bgp_vrf, f"{{{NS_BGPVRF}}}route-targets")
-        route_target = ET.SubElement(route_targets, f"{{{NS_BGPVRF}}}route-target")
+        route_targets = ET.SubElement(bgp_vrf, self._tag("bgpvrf", "route-targets"))
+        route_target = ET.SubElement(route_targets, self._tag("bgpvrf", "route-target"))
         ET.SubElement(
-            route_target, f"{{{NS_BGPVRF}}}rt-rd-string"
+            route_target, self._tag("bgpvrf", "rt-rd-string")
         ).text = f"{evpn.asn}:{evpn.vni}"
-        rt_config = ET.SubElement(route_target, f"{{{NS_BGPVRF}}}config")
+        rt_config = ET.SubElement(route_target, self._tag("bgpvrf", "config"))
         ET.SubElement(
-            rt_config, f"{{{NS_BGPVRF}}}rt-rd-string"
+            rt_config, self._tag("bgpvrf", "rt-rd-string")
         ).text = f"{evpn.asn}:{evpn.vni}"
-        ET.SubElement(rt_config, f"{{{NS_BGPVRF}}}direction").text = "import export"
+        ET.SubElement(
+            rt_config, self._tag("bgpvrf", "direction")
+        ).text = "import export"
 
         return root
 
@@ -199,76 +216,45 @@ class OcnosDeviceRenderer(DeviceRenderer):
         return self._tostring(config)
 
     def _append_vrf_delete(self, root: ET.Element, evpn: Evpn) -> ET.Element:
-        NS_NC = "urn:ietf:params:xml:ns:netconf:base:1.0"
-        NS_IF = "http://www.ipinfusion.com/yang/ocnos/ipi-interface"
-        NS_VRF = "http://www.ipinfusion.com/yang/ocnos/ipi-vrf"
-        NS_BGPVRF = "http://www.ipinfusion.com/yang/ocnos/ipi-bgp-vrf"
-        NS_NETINST = "http://www.ipinfusion.com/yang/ocnos/ipi-network-instance"
-        ET.register_namespace("nc", NS_NC)
-        ET.register_namespace("if", NS_IF)
-        ET.register_namespace("vrf", NS_VRF)
-        ET.register_namespace("bgpvrf", NS_BGPVRF)
-        ET.register_namespace("netinst", NS_NETINST)
-
-        network_instances = ET.SubElement(root, f"{{{NS_NETINST}}}network-instances")
-        network_instance = ET.SubElement(
-            network_instances, f"{{{NS_NETINST}}}network-instance"
+        network_instances = ET.SubElement(
+            root, self._tag("netinst", "network-instances")
         )
-        network_instance.set(f"{{{NS_NC}}}operation", "delete")
+        network_instance = ET.SubElement(
+            network_instances, self._tag("netinst", "network-instance")
+        )
+        network_instance.set(self._tag("nc", "operation"), "delete")
         ET.SubElement(
-            network_instance, f"{{{NS_NETINST}}}instance-name"
+            network_instance, self._tag("netinst", "instance-name")
         ).text = evpn.description
         ET.SubElement(
-            network_instance, f"{{{NS_NETINST}}}instance-type"
+            network_instance, self._tag("netinst", "instance-type")
         ).text = "mac-vrf"
 
-        # <config>
-        #  <instance-name>so12345</instance-name>
-        #  <instance-type>mac-vrf</instance-type>
-        # </config>
+        vrf = ET.SubElement(network_instance, self._tag("vrf", "vrf"))
+        vrf.set(self._tag("nc", "operation"), "delete")
+        vrf_config = ET.SubElement(vrf, self._tag("vrf", "config"))
+        ET.SubElement(vrf_config, self._tag("vrf", "vrf-name")).text = evpn.description
 
-        #        config = ET.SubElement(network_instance, f"{{{NS_NETINST}}}config")
-        #        ET.SubElement(config, f"{{{NS_NETINST}}}instance-name").text = evpn.description
-        #        ET.SubElement(config, f"{{{NS_NETINST}}}instance-type").text = "mac-vrf"
-        ##        <vrf xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-vrf">
-        ##          <config>
-        #            <vrf-name>so12345</vrf-name>
-        #          </config>
-
-        vrf = ET.SubElement(network_instance, f"{{{NS_VRF}}}vrf")
-        vrf.set(f"{{{NS_NC}}}operation", "delete")
-        vrf_config = ET.SubElement(vrf, f"{{{NS_VRF}}}config")
-        ET.SubElement(vrf_config, f"{{{NS_VRF}}}vrf-name").text = evpn.description
-
-        #          <bgp-vrf xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-bgp-vrf">
-        #            <config>
-        #              <rd-string>65511:99</rd-string>
-        #            </config>
-
-        bgp_vrf = ET.SubElement(vrf, f"{{{NS_BGPVRF}}}bgp-vrf")
-        bgp_vrf.set(f"{{{NS_NC}}}operation", "delete")
-        bgp_vrf_config = ET.SubElement(bgp_vrf, f"{{{NS_BGPVRF}}}config")
+        bgp_vrf = ET.SubElement(vrf, self._tag("bgpvrf", "bgp-vrf"))
+        bgp_vrf.set(self._tag("nc", "operation"), "delete")
+        bgp_vrf_config = ET.SubElement(bgp_vrf, self._tag("bgpvrf", "config"))
         ET.SubElement(
-            bgp_vrf_config, f"{{{NS_BGPVRF}}}rd-string"
+            bgp_vrf_config, self._tag("bgpvrf", "rd-string")
         ).text = f"{evpn.asn}:{evpn.vni}"
 
-        #             <route-targets>
-        #               <route-target>
-        #                 <rt-rd-string>37186:99</rt-rd-string>
-        #                 <config>
-        #                   <rt-rd-string>37186:99</rt-rd-string>
-        #                   <direction>import export</direction>
-        route_targets = ET.SubElement(bgp_vrf, f"{{{NS_BGPVRF}}}route-targets")
-        route_target = ET.SubElement(route_targets, f"{{{NS_BGPVRF}}}route-target")
-        route_target.set(f"{{{NS_NC}}}operation", "delete")
+        route_targets = ET.SubElement(bgp_vrf, self._tag("bgpvrf", "route-targets"))
+        route_target = ET.SubElement(route_targets, self._tag("bgpvrf", "route-target"))
+        route_target.set(self._tag("nc", "operation"), "delete")
         ET.SubElement(
-            route_target, f"{{{NS_BGPVRF}}}rt-rd-string"
+            route_target, self._tag("bgpvrf", "rt-rd-string")
         ).text = f"{evpn.asn}:{evpn.vni}"
-        rt_config = ET.SubElement(route_target, f"{{{NS_BGPVRF}}}config")
+        rt_config = ET.SubElement(route_target, self._tag("bgpvrf", "config"))
         ET.SubElement(
-            rt_config, f"{{{NS_BGPVRF}}}rt-rd-string"
+            rt_config, self._tag("bgpvrf", "rt-rd-string")
         ).text = f"{evpn.asn}:{evpn.vni}"
-        ET.SubElement(rt_config, f"{{{NS_BGPVRF}}}direction").text = "import export"
+        ET.SubElement(
+            rt_config, self._tag("bgpvrf", "direction")
+        ).text = "import export"
 
         return root
 
