@@ -25,6 +25,8 @@ class Lag(Interface):
     members: List[Interface] = Field(default_factory=list)
     lacp_mode: Literal["active", "passive", "static"] = "active"
     min_links: int = 1
+    # this is for tracking mac vrf
+    system_mac: Optional[str] = None
 
 
 # EVPN Models
@@ -35,14 +37,15 @@ class Vrf(BaseModel):
     rt_export: List[str]
 
 
-class Bgp(BaseModel):
-    as_number: int
-    router_id: str
-    neighbors: List[str] = Field(default_factory=list)
+class Connection(BaseModel):
+    host: str
+    interface: Interface | Lag
 
-
-class EvpnService(BaseModel):
-    vlan_id: int
+class Evpn(BaseModel):
+    vlan: Vlan
+    description: str
+    asn: int
     vni: int
-    vrf_name: str
-    s_tag: Optional[int] = Field(None, ge=1, le=4094)
+
+class EvpnService(Evpn):
+    connections: List[Connection]

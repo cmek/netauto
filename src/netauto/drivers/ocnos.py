@@ -1,8 +1,8 @@
 from .base import DeviceDriver
 from scrapli_netconf.driver import NetconfDriver as ScrapliNetconfDriver
 import re
-from netauto.models import Interface, Vlan, Lag
-from typing import List, Dict, Any
+from netauto.models import Interface, Vlan, Lag, Evpn
+from typing import List, Dict
 import difflib
 
 import xml.etree.ElementTree as ET
@@ -177,6 +177,43 @@ class OcnosDriver(DeviceDriver):
             logger.error(f"Failed to get configuration: {e}")
             return ""
 
+    def _extract_system_macs(self, evpn_data):
+        """
+                extracts system macs from the evpn xml response
+
+                <rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="105" last-modified="2025-11-24T17:03:02Z">
+          <data>
+            <evpn xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-ethernet-vpn">
+              <interfaces>
+                <interface>
+                  <name>po1</name>
+                  <config>
+                    <name>po1</name>
+                    <system-mac>6E61.7000.0044</system-mac>
+                  </config>
+                  <state>
+                    <name>po1</name>
+                    <system-mac>6E61.7000.0044</system-mac>
+                  </state>
+                </interface>
+              </interfaces>
+            </evpn>
+          </data>
+        </rpc-reply>
+        """
+        evpn_data = self._fix_ocnos_xml(evpn_data)
+        root = etree.fromstring(evpn_data)
+
+        system_macs = {}
+        ns = {"evpn": "http://www.ipinfusion.com/yang/ocnos/ipi-ethernet-vpn"}
+
+        for intf in root.xpath("//*[local-name()='interface']"):
+            name = self._get_text(intf.find(f".//evpn:name", ns))
+            system_mac = self._get_text(intf.find(".//evpn:system-mac", ns))
+            if system_mac:
+                system_macs[name] = system_mac
+        return system_macs
+
     def get_interfaces(self) -> Dict[str, Interface]:
         """
         Retrieves interfaces from OcNOS using Netconf.
@@ -191,69 +228,84 @@ class OcnosDriver(DeviceDriver):
         <interfaces xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-interface">
         </interfaces>
         """
+
+        evpn_filter = """
+  <evpn xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-ethernet-vpn">
+    <interfaces>
+    </interfaces>
+  </evpn>
+        """
         try:
             response = self.conn.get(filter_=filter_)
             response.raise_for_status()
 
+            evpn_response = self.conn.get(filter_=evpn_filter)
+            evpn_response.raise_for_status()
+
             interfaces = self._extract_interfaces(response.result)
+            system_macs = self._extract_system_macs(evpn_response.result)
+            for interface in interfaces:
+                if interface.name in system_macs:
+                    interface.system_mac = system_macs[interface.name]
             return interfaces
         except Exception as e:
             logger.error(f"Failed to get interfaces: {e}")
             raise
 
     def get_vlans(self) -> Dict[int, Vlan]:
-        filter_ = """
-        <vlan-database xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-vlan">
-        </vlan-database>
         """
-        try:
-            response = self.conn.get(filter_=filter_)
-            if not response.result:
-                return {}
+        return all vlans found on all interfaces
+        XXX this doesn't include any access vlans since we're currently not collecting them
+        """
+        vlans = []
+        interfaces = self.get_interfaces()
+        for intf in interfaces:
+            for vlan in intf.trunk_vlans:
+                vlans.append(vlan)
+        return vlans
 
-            root = ET.fromstring(response.result)
-            ns = {"ocnos": "http://www.ipinfusion.com/yang/ocnos/ipi-vlan"}
+    def get_system_macs(self) -> List[str]:
+        """
+        return all system macs found on lag interfaces
+        """
+        system_macs = []
+        interfaces = self.get_interfaces()
+        for intf in interfaces:
+            if isinstance(intf, Lag) and intf.system_mac:
+                system_macs.append(intf.system_mac)
+        return system_macs
 
-            vlans = {}
-            for vlan in root.findall(".//ocnos:vlan", ns):
-                vlan_id_elem = vlan.find("ocnos:id", ns)
-                if vlan_id_elem is not None:
-                    vlan_id = int(vlan_id_elem.text)
-                    name_elem = vlan.find("ocnos:name", ns)
-                    name = name_elem.text if name_elem is not None else f"VLAN{vlan_id}"
-                    vlans[vlan_id] = Vlan(vlan_id=vlan_id, name=name)
-            return vlans
-        except Exception as e:
-            logger.error(f"Failed to get VLANs: {e}")
-            return {}
+    def get_vnis(self) -> List[int]:
+        """
+                Retrieves VNIs from OcNOS using Netconf.
 
-    def get_vnis(self) -> Dict[int, Dict[str, Any]]:
+          <vxlan xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-vxlan"><global><config><enable-vxlan/><vtep-ipv4>10.0.10.4</vtep-ipv4></config></global>obal&gt;
+          <vxlan-tenants><vxlan-tenant><vxlan-identifier>99</vxlan-identifier><config><vxlan-identifier>99</vxlan-identifier><tenant-type>ingress-replication</tenant-type><vrf-name>so12345</vrf-name></config></vxlan-tenant></vxlan-tenants>
+        </vxlan>
+
+        """
+
         filter_ = """
         <vxlan xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-vxlan">
         </vxlan>
         """
+        vnis = []
         try:
             response = self.conn.get(filter_=filter_)
             if not response.result:
-                return {}
+                return []
 
-            root = ET.fromstring(response.result)
-            ns = {"ocnos": "http://www.ipinfusion.com/yang/ocnos/ipi-vxlan"}
+            vxlan_data = self._fix_ocnos_xml(response.result)
+            root = etree.fromstring(vxlan_data)
 
-            vnis = {}
-            for vxlan in root.findall(
-                ".//ocnos:vxlan", ns
-            ):  # Assuming list of vxlan mappings
-                # Note: Structure might be different, e.g. single vxlan container with list
-                # Adjusting for potential list item
-                vni_elem = vxlan.find("ocnos:vni", ns)
-                vlan_elem = vxlan.find("ocnos:vlan", ns)
+            ns = {"vxlan": "http://www.ipinfusion.com/yang/ocnos/ipi-vxlan"}
 
-                if vni_elem is not None and vlan_elem is not None:
-                    vni = int(vni_elem.text)
-                    vlan_id = int(vlan_elem.text)
-                    vnis[vni] = {"vlan_id": vlan_id}
-            return vnis
+            for vxlan in root.find(".//vxlan:vxlan-tenant", ns):
+                vni = self._get_text(vxlan.find(f".//vxlan:vxlan-identifier", ns))
+                if vni:
+                    vnis.append(int(vni))
+
+            return list(set(vnis))
         except Exception as e:
             logger.error(f"Failed to get VNIs: {e}")
             return {}
@@ -287,6 +339,9 @@ class OcnosDriver(DeviceDriver):
         For Netconf, 'commands' is expected to be a list containing a single XML string
         (since our renderer now returns [xml_string]).
         """
+        if commands is None or len(commands) == 0:
+            logger.info("No commands to push")
+            return ""
         try:
             logger.info(f"retrieved running config from {self.conn.host}")
             running_cfg = self.conn.get_config(source="running")
@@ -298,7 +353,7 @@ class OcnosDriver(DeviceDriver):
             for cmd in commands:
                 logger.info(f"applying config to candidate on {self.conn.host}:\n{cmd}")
                 resp = self.conn.edit_config(config=cmd, target="candidate")
-                print("result: ", resp.result)
+                print(f"edit_config response: {resp.result}")
                 resp.raise_for_status()
 
             candidate_cfg = self.conn.get_config(source="candidate")
@@ -320,14 +375,13 @@ class OcnosDriver(DeviceDriver):
             # diff = xmldiff.diff_trees(etree.fromstring(running_cfg.result.replace("urn:ietf:params:xml:n s:yang:ietf-netconf-acm", "urn:ietf:params:xml:ns:yang:ietf-netconf-acm")), etree.fromstring(candidate_cfg.result.replace("urn:ietf:params:xml:n s:yang:ietf-netconf-acm", "urn:ietf:params:xml:ns:yang:ietf-netconf-acm")))
 
             diff = self._compute_diff(running_cfg.result, candidate_cfg.result)
-            logger.info(f"computed config diff on {self.conn.host}:\n{diff}")
+            # logger.info(f"computed config diff on {self.conn.host}:\n{diff}")
             if dry_run:
                 logger.info(f"dry run enabled, discarding changes on {self.conn.host}")
                 self.conn.discard()
                 return diff
             else:
                 response = self.conn.commit()
-                print("result: ", response.result)
                 response.raise_for_status()
             # XXX this does nothing
             r = self.conn.copy_config(source="running", target="startup")
@@ -370,5 +424,22 @@ class OcnosDriver(DeviceDriver):
             self.renderer.render_vlan_delete(interface, vlan)
             if delete
             else self.renderer.render_vlan(interface, vlan)
+        )
+        return self.push_config([config_xml], dry_run=dry_run)
+
+    def push_evpn(
+        self,
+        interface: Interface,
+        evpn: Evpn,
+        delete: bool = False,
+        dry_run: bool = False,
+    ) -> str:
+        """
+        Pushes evpn configuration to OcNOS.
+        """
+        config_xml = (
+            self.renderer.render_evpn_delete(interface, evpn)
+            if delete
+            else self.renderer.render_evpn(interface, evpn)
         )
         return self.push_config([config_xml], dry_run=dry_run)
