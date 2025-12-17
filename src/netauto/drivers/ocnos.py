@@ -90,10 +90,18 @@ class OcnosDriver(DeviceDriver):
         # like [local-name()='interface'] in xpath
         for intf in root.xpath("//*[local-name()='interface']"):
             name = self._get_text(intf.find(f".//if:name", OCNOS_NS))
+            if name is None:
+                name = self._get_text(intf.find(f".//nc:name", OCNOS_NS))
             description = self._get_text(intf.find(".//if:description", OCNOS_NS))
+            if description is None:
+                description = self._get_text(intf.find(".//nc:description", OCNOS_NS))
             logical = self._get_bool(
                 intf.find(".//if:logical", OCNOS_NS), default=False
             )
+            if logical is None:
+                logical = self._get_bool(
+                    intf.find(".//nc:logical", OCNOS_NS), default=False
+                )
 
             # Encapsulation / VLAN info
             encapsulation_type = self._get_text(
