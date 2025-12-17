@@ -41,11 +41,13 @@ class Connection(BaseModel):
     host: str
     interface: Interface | Lag
 
+
 class Evpn(BaseModel):
     vlan: Vlan
     description: str
     asn: int
     vni: int
+
 
 class EvpnService(Evpn):
     connections: List[Connection]

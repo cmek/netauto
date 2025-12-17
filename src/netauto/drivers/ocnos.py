@@ -410,6 +410,17 @@ class OcnosDriver(DeviceDriver):
         )
         return self.push_config([config_xml], dry_run=dry_run)
 
+    def push_lag(self, lag: Lag, delete: bool = False, dry_run: bool = False) -> str:
+        """
+        Pushes lag configuration to OcNOS.
+        """
+        config_xml = (
+            self.renderer.render_lag_delete(lag)
+            if delete
+            else self.renderer.render_lag(lag)
+        )
+        return self.push_config([config_xml], dry_run=dry_run)
+
     def push_vlan(
         self,
         interface: Interface,

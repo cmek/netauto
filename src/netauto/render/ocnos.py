@@ -13,6 +13,7 @@ class OcnosDeviceRenderer(DeviceRenderer):
         "vrf": "http://www.ipinfusion.com/yang/ocnos/ipi-vrf",
         "bgpvrf": "http://www.ipinfusion.com/yang/ocnos/ipi-bgp-vrf",
         "netinst": "http://www.ipinfusion.com/yang/ocnos/ipi-network-instance",
+        "ifagg": "http://www.ipinfusion.com/yang/ocnos/ipi-if-aggregate",
     }
 
     def __init__(self):
@@ -35,15 +36,41 @@ class OcnosDeviceRenderer(DeviceRenderer):
         """Create the root <config> element for OcNOS XML configuration."""
         return ET.Element("config")
 
-    def _append_interface(self, root: ET.Element, interface: Interface) -> ET.Element:
-        interfaces = ET.SubElement(root, self._tag("if", "interfaces"))
-        intf = ET.SubElement(interfaces, self._tag("if", "interface"))
+        #    def _append_interface_system_mac(self, interface: Lag) -> ET.Element:
+        # ET.SubElement(
+        #    intf_config, self._tag("if", "system-mac")
+        # ).text = system_mac
+
+    def _append_interface(
+        self,
+        root: ET.Element,
+        interface: Interface | Lag,
+        port_channel_id: int | None = None,
+        lacp_mode: str | None = None,
+        skip_interfaces=False,
+    ) -> ET.Element:
+        if not skip_interfaces:
+            interfaces = ET.SubElement(root, self._tag("if", "interfaces"))
+            intf = ET.SubElement(interfaces, self._tag("if", "interface"))
+        else:
+            intf = ET.SubElement(root, self._tag("if", "interface"))
         ET.SubElement(intf, self._tag("if", "name")).text = interface.name
         intf_config = ET.SubElement(intf, self._tag("if", "config"))
         ET.SubElement(intf_config, self._tag("if", "mtu")).text = str(interface.mtu)
         ET.SubElement(
             intf_config, self._tag("if", "description")
         ).text = interface.description
+        if isinstance(interface, Lag):
+            ET.SubElement(intf_config, self._tag("if", "enable-switchport"))
+
+        if port_channel_id is not None:
+            agg = ET.SubElement(intf, self._tag("ifagg", "member-aggregation"))
+            agg_config = ET.SubElement(agg, self._tag("ifagg", "config"))
+            ET.SubElement(agg_config, self._tag("ifagg", "agg-type")).text = "lacp"
+            ET.SubElement(agg_config, self._tag("ifagg", "aggregate-id")).text = str(
+                port_channel_id
+            )
+            ET.SubElement(agg_config, self._tag("ifagg", "lacp-mode")).text = lacp_mode
 
         return root
 
@@ -60,7 +87,21 @@ class OcnosDeviceRenderer(DeviceRenderer):
 
     def render_lag(self, lag: Lag) -> List[str]:
         """Render LAG configuration commands for the given platform."""
-        pass
+        port_channel_id = int(lag.name.replace("po", ""))
+
+        config = self._config_root()
+        interfaces = ET.SubElement(config, self._tag("if", "interfaces"))
+        interfaces = self._append_interface(interfaces, lag, skip_interfaces=True)
+        for member in lag.members:
+            interfaces = self._append_interface(
+                interfaces,
+                member,
+                port_channel_id=port_channel_id,
+                lacp_mode=lag.lacp_mode,
+                skip_interfaces=True,
+            )
+
+        return self._tostring(config)
 
     def render_lag_delete(self, lag: Lag) -> List[str]:
         """Render LAG configuration commands for the given platform."""
