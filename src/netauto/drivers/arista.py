@@ -130,15 +130,20 @@ class AristaDriver(DeviceDriver):
 
         return vnis
 
-    def push_evpn(
-        self, interface, evpn: Evpn, delete: bool = False, dry_run: bool = False
-    ):
+    def push_evpn(self, interface, evpn: Evpn, delete: bool = False, dry_run: bool = False):
         commands = (
             self.renderer.render_evpn_delete(interface, evpn)
             if delete
             else self.renderer.render_evpn(interface, evpn)
         )
         return self.push_config(commands, dry_run=dry_run)
+
+    def get_system_macs(self) -> List[str]:
+        """Retrieve system MAC addresses from Arista EOS.
+        XXX not implemented yet
+        """
+        system_macs = []
+        return system_macs
 
     def push_lag(self, lag: Lag, delete: bool = False, dry_run: bool = False):
         commands = (
