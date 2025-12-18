@@ -130,13 +130,23 @@ class AristaDriver(DeviceDriver):
 
         return vnis
 
+    def push_evpn(
+        self, interface, evpn: Evpn, delete: bool = False, dry_run: bool = False
+    ):
+        commands = (
+            self.renderer.render_evpn_delete(interface, evpn)
+            if delete
+            else self.renderer.render_evpn(interface, evpn)
+        )
+        return self.push_config(commands, dry_run=dry_run)
+
     def push_lag(self, lag: Lag, delete: bool = False, dry_run: bool = False):
         commands = (
             self.renderer.render_lag_delete(lag)
             if delete
-            else self.renderer.render_lag_config(lag)
+            else self.renderer.render_lag(lag)
         )
-        return self.push_config([commands], dry_run=dry_run)
+        return self.push_config(commands, dry_run=dry_run)
 
     def push_config(self, commands: List[str], dry_run: bool = False):
         self.node.configure_session()
