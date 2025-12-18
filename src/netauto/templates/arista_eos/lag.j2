@@ -1,14 +1,8 @@
 {# Arista EOS LAG Configuration Template #}
-interface {{ lag_name }}
-{% if has_vlans %}
-  switchport mode trunk
-  switchport trunk allowed vlan {{ vlans|join(',') }}
-{% else %}
-  no switchport
-{% endif %}
-  exit
-{% for member in members %}
-interface {{ member }}
-  channel-group {{ lag_number }} mode {{ lacp_mode }}
+interface {{ lag.name }}
+  description {{ lag.description }}
+{% for member in lag.members %}
+interface {{ member.name }}
+  channel-group {{ lag.name.removeprefix("Port-Channel") }} mode {{ lag.lacp_mode }}
   exit
 {% endfor %}

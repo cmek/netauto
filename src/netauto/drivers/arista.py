@@ -1,6 +1,7 @@
 from .base import DeviceDriver
 import pyeapi
-from ..models import Interface, Vlan
+from netauto.models import Interface, Vlan, Lag, Evpn
+from netauto.render import AristaDeviceRenderer
 from typing import List, Dict, Any
 import logging
 
@@ -17,6 +18,7 @@ class AristaDriver(DeviceDriver):
         self.password = password
         self.enable_password = enable_password
         self.node = None
+        self.renderer = AristaDeviceRenderer()
 
     @property
     def platform(self) -> str:
@@ -45,7 +47,7 @@ class AristaDriver(DeviceDriver):
         # eAPI is stateless, nothing to close
         pass
 
-    def get_interfaces(self) -> Dict[str, Interface]:
+    def get_interfaces(self) -> List[Interface | Lag]:
         """
         Retrieves interfaces from Arista EOS using 'show interfaces | json'.
         """
@@ -59,35 +61,37 @@ class AristaDriver(DeviceDriver):
 
         # switchports = data_sw.get("switchports", {})
 
-        interfaces = {}
+        interfaces = []
         for name, intf_data in data.get("interfaces", {}).items():
-            print(name)
+            print(intf_data)
             mode = "routed"
             trunk_vlans = []
             access_vlan = None
 
-            # Check if it has switchport info
-            #            if name in switchports:
-            #                sw_data = switchports[name]
-            #                sw_info = sw_data.get("switchportInfo", {})
-            #
-            #                if sw_info.get("mode") == "trunk":
-            #                    mode = "trunk"
-            #                    vlans_str = sw_info.get("trunkAllowedVlans", "")
-            #                    if vlans_str and vlans_str != "ALL":
-            #                        try:
-            #                            trunk_vlans = [
-            #                                int(v) for v in vlans_str.split(",") if v.isdigit()
-            #                            ]
-            #                        except ValueError:
-            #                            pass
-            #                elif sw_info.get("mode") == "access":
-            #                    mode = "access"
-            #                    access_vlan = sw_info.get("accessVlanId")
-
-            interfaces[name] = Interface(
-                name=name, mode=mode, trunk_vlans=trunk_vlans, access_vlan=access_vlan
-            )
+            if name.startswith(self.lag_prefix):
+                # It's a LAG
+                members = []
+                lacp_mode = "active"  # default
+                for member_name, member_data in intf_data.get("members", {}).items():
+                    members.append(Interface(name=member_name))
+                lag = Lag(
+                    name=name,
+                    mode="routed",
+                    members=members,
+                    lacp_mode=lacp_mode,
+                    min_links=1,
+                )
+                interfaces.append(lag)
+                continue
+            else:
+                interfaces.append(
+                    Interface(
+                        name=name,
+                        mode=mode,
+                        trunk_vlans=trunk_vlans,
+                        access_vlan=access_vlan,
+                    )
+                )
 
         return interfaces
 
@@ -125,6 +129,14 @@ class AristaDriver(DeviceDriver):
                 vnis[vni] = {"vlan_id": vlan_id}
 
         return vnis
+
+    def push_lag(self, lag: Lag, delete: bool = False, dry_run: bool = False):
+        commands = (
+            self.renderer.render_lag_delete(lag)
+            if delete
+            else self.renderer.render_lag_config(lag)
+        )
+        return self.push_config([commands], dry_run=dry_run)
 
     def push_config(self, commands: List[str], dry_run: bool = False):
         self.node.configure_session()

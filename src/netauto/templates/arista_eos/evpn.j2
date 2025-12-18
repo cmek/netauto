@@ -1,0 +1,33 @@
+{# Arista EOS EVPN Service Configuration Template #}
+{% set vlan = evpn.vlan %}
+{% if vlan.s_tag %}
+vlan {{ vlan.s_tag }}
+{% else %}
+vlan {{ vlan.vlan_id }}
+{% endif %}
+   name {{ evpn.description }}
+interface {{ interface.name }}
+   switchport mode trunk
+{% if vlan.s_tag %}
+   switchport trunk allowed vlan add {{ vlan.s_tag }}
+   switchport vlan translation {{ vlan.vlan_id }} dot1q-tunnel {{ vlan.s_tag }}
+{% else %}
+   switchport trunk allowed vlan add {{ vlan.vlan_id }}
+{% endif %}
+interface Vxlan1
+{% if vlan.s_tag %}
+   vxlan vlan {{ vlan.s_tag }} vni {{ evpn.vni }}
+{% else %}
+   vxlan vlan {{ vlan.vlan_id }} vni {{ evpn.vni }}
+{% endif %}
+router bgp {{ evpn.asn }}
+   vlan-aware-bundle {{ evpn.vni }}
+{% if vlan.s_tag %}
+      vlan add {{ vlan.s_tag }}
+{% else %}
+      rd {{ evpn.asn }}:{{ evpn.vni }}
+      route-target both {{ evpn.asn }}:{{ evpn.vni }}
+      redistribute learned
+      redistribute static
+      vlan {{ vlan.vlan_id }}
+{% endif %}

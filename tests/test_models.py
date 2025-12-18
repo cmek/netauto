@@ -1,6 +1,6 @@
 import pytest
 from pydantic import ValidationError
-from netauto.models import Vlan, Interface, Lag, Vrf, Bgp, EvpnService
+from netauto.models import Vlan, Interface, Lag, Vrf, Evpn, EvpnService
 
 
 class TestModels:
