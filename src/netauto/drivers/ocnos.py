@@ -23,6 +23,7 @@ OCNOS_NS = {
     "ife2": "http://www.ipinfusion.com/yang/ocnos/ipi-if-ethernet",
     "ifagg": "http://www.ipinfusion.com/yang/ocnos/ipi-if-aggregate",
     "nc": "urn:ietf:params:xml:ns:netconf:base:1.0",
+    "vxlan": "http://www.ipinfusion.com/yang/ocnos/ipi-vxlan",
 }
 
 def pretty_xml(xml_str: str) -> str:
@@ -311,81 +312,54 @@ class OcnosDriver(DeviceDriver):
             for vlan in intf.trunk_vlans
         ]
 
+    # This could cause additional calls of get_interfaces, we could do a cache of it locally?
+    def get_system_macs(self) -> list[str]:
+        return [
+            intf.system_mac
+            for intf in self.get_interfaces()
+            if isinstance(intf, Lag) and intf.system_mac
+        ]
 
-#     def get_system_macs(self) -> List[str]:
-#         """
-#         return all system macs found on lag interfaces
-#         """
-#         system_macs = []
-#         interfaces = self.get_interfaces()
-#         for intf in interfaces:
-#             if isinstance(intf, Lag) and intf.system_mac:
-#                 system_macs.append(intf.system_mac)
-#         return system_macs
+    def get_vnis(self) -> list[int]:
+        """
+        Retrieves VNIs from OcNOS using Netconf.
+        """
+        if self.conn is None or not self.conn.connected:  # consider making this a decorator?
+            raise ConnectionError("Not connected to device")
 
-    def get_system_macs(self) -> List[str]:
-        pass
+        vxlan_subtree = """
+        <vxlan xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-vxlan"/>
+        """
+    
+        try:
+            vxlan_filter = ("subtree", vxlan_subtree)
+            vxlan_reply: GetReply = self.conn.get(filter=vxlan_filter)
 
-#     def get_vnis(self) -> List[int]:
-#         """
-#                 Retrieves VNIs from OcNOS using Netconf.
+            root: etree._Element | None = vxlan_reply.data_ele
+            if root is None:
+                return []
 
-#           <vxlan xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-vxlan"><global><config><enable-vxlan/><vtep-ipv4>10.0.10.4</vtep-ipv4></config></global>obal&gt;
-#           <vxlan-tenants><vxlan-tenant><vxlan-identifier>99</vxlan-identifier><config><vxlan-identifier>99</vxlan-identifier><tenant-type>ingress-replication</tenant-type><vrf-name>so12345</vrf-name></config></vxlan-tenant></vxlan-tenants>
-#         </vxlan>
+            vnis: set[int] = set()
 
-#         """
+            for tenant in root.xpath(".//vxlan:vxlan-tenant", namespaces=OCNOS_NS):
+                tenant: etree._Element
+                vni_text = tenant.findtext(".//*[local-name()='vxlan-identifier']", None, namespaces=OCNOS_NS)
+    
+                if not vni_text:
+                    continue
 
-#         filter_ = """
-#         <vxlan xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-vxlan">
-#         </vxlan>
-#         """
-#         vnis = []
-#         try:
-#             response = self.conn.get(filter_=filter_)
-#             if not response.result:
-#                 return []
+                vni_text = vni_text.strip()
 
-#             vxlan_data = self._fix_ocnos_xml(response.result)
-#             root = etree.fromstring(vxlan_data)
+                try:
+                    vnis.add(int(vni_text))
+                except ValueError:
+                    logger.debug("invalid vni: %r", vni_text)
 
-#             ns = {"vxlan": "http://www.ipinfusion.com/yang/ocnos/ipi-vxlan"}
+            return sorted(vnis)
 
-#             for vxlan in root.find(".//vxlan:vxlan-tenant", ns):
-#                 vni = self._get_text(vxlan.find(f".//vxlan:vxlan-identifier", ns))
-#                 if vni:
-#                     vnis.append(int(vni))
-
-#             return list(set(vnis))
-#         except Exception as e:
-#             logger.error(f"Failed to get VNIs: {e}")
-#             return {}
-
-    def get_vnis(self) -> List[int]:
-        pass
-
-#     def _normalize_xml(self, xml_str: str) -> str:
-#         """
-#         Normalizes XML string for comparison by removing insignificant whitespace.
-#         """
-#         # fix Ocnos bug:
-#         xml_str = self._fix_ocnos_xml(xml_str)
-#         parser = etree.XMLParser(remove_blank_text=True)
-#         tree = etree.fromstring(xml_str.encode(), parser)
-#         return etree.tostring(tree, pretty_print=True).decode()
-
-#     def _compute_diff(self, running_cfg: str, candidate_cfg: str) -> str:
-#         normalized_running = self._normalize_xml(running_cfg)
-#         normalized_candidate = self._normalize_xml(candidate_cfg)
-#         running_lines = normalized_running.splitlines(keepends=True)
-#         candidate_lines = normalized_candidate.splitlines(keepends=True)
-#         diff_lines = difflib.unified_diff(
-#             running_lines,
-#             candidate_lines,
-#             fromfile="running-config",
-#             tofile="candidate-config",
-#         )
-#         return "".join(diff_lines)
+        except Exception as e:  # i dont like this, revise it when ive got more data 
+            logger.exception("Failed to get VNIs: %s", e)
+            return []
 
 #     def push_config(self, commands: List[str], dry_run: bool = False) -> str:
 #         """
