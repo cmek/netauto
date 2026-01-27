@@ -52,8 +52,19 @@ class OcnosDriver(DeviceDriver):
     def lag_prefix(self) -> str:
         return "po"
     
-    def get_vlans(self) -> dict:
-        pass
+
+#     def get_vlans(self) -> Dict[int, Vlan]:
+#         """
+#         return all vlans found on all interfaces
+#         XXX this doesn't include any access vlans since we're currently not collecting them
+#         """
+#         vlans = []
+#         interfaces = self.get_interfaces()
+#         for intf in interfaces:
+#             for vlan in intf.trunk_vlans:
+#                 vlans.append(vlan)
+#         return vlans
+
 
     def connect(self) -> Manager: # type: ignore
         if hasattr(self, "conn"):
@@ -253,18 +264,6 @@ class OcnosDriver(DeviceDriver):
 
         return system_macs
 
-#     def get_vlans(self) -> Dict[int, Vlan]:
-#         """
-#         return all vlans found on all interfaces
-#         XXX this doesn't include any access vlans since we're currently not collecting them
-#         """
-#         vlans = []
-#         interfaces = self.get_interfaces()
-#         for intf in interfaces:
-#             for vlan in intf.trunk_vlans:
-#                 vlans.append(vlan)
-#         return vlans
-
     def get_interfaces(self) -> list[Interface | Lag]:
         if self.conn is None or not self.conn.connected: # consider making this a decorator?
             raise ConnectionError("Not connected to device")
@@ -302,6 +301,16 @@ class OcnosDriver(DeviceDriver):
         except Exception as e:
             logger.exception(f"Failed to get interfaces: {e}")
             raise
+
+    # This could cause additional calls of get_interfaces, we could do a cache of it locally?
+    def get_vlans(self) -> list[Vlan]:
+        return [
+            vlan
+            for intf in self.get_interfaces()
+            if isinstance(intf, Interface)
+            for vlan in intf.trunk_vlans
+        ]
+
 
 #     def get_system_macs(self) -> List[str]:
 #         """
