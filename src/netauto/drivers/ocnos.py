@@ -1,5 +1,5 @@
 from .base import DeviceDriver
-from scrapli_netconf.driver import NetconfDriver as ScrapliNetconfDriver
+# from scrapli_netconf.driver import NetconfDriver as ScrapliNetconfDriver
 import re
 from netauto.models import Interface, Vlan, Lag, Evpn
 from typing import List, Dict
@@ -9,6 +9,11 @@ import xml.etree.ElementTree as ET
 from lxml import etree
 from netauto.render import OcnosDeviceRenderer
 import logging
+from ncclient import manager
+from ncclient.manager import Manager
+from pathlib import Path  # Remove me once testing is done
+from ncclient.operations.retrieve import GetReply
+from ncclient.operations import RPCError
 
 logger = logging.getLogger(__name__)
 
@@ -20,25 +25,24 @@ OCNOS_NS = {
     "nc": "urn:ietf:params:xml:ns:netconf:base:1.0",
 }
 
+def pretty_xml(xml_str: str) -> str:
+    node = etree.fromstring(xml_str.encode("utf-8"))
+    return etree.tostring(node, pretty_print=True, encoding="unicode")
+
 
 class OcnosDriver(DeviceDriver):
-    def __init__(self, host: str, user: str, password: str):
-        self.conn = ScrapliNetconfDriver(
-            host=host,
-            auth_username=user,
-            auth_password=password,
-            auth_strict_key=False,
-            transport="paramiko",
-        )
+    def __init__(self, host: str, user: str, password: str) -> None:
+        self.connection_data = {
+            "host": host,
+            "port": 830,
+            "username": user,
+            "password": password,
+            "hostkey_verify": False, # Change to true for prod?
+            "allow_agent": False,
+            "timeout": 30,
+        }
+        self.conn: Manager = self.connect()
         self.renderer = OcnosDeviceRenderer()
-
-    def _get_text(self, elem: ET.Element | None) -> str | None:
-        return elem.text.strip() if elem is not None and elem.text is not None else None
-
-    def _get_bool(self, elem: ET.Element | None, default: bool = False) -> bool:
-        if elem is None or elem.text is None:
-            return default
-        return elem.text.strip().lower() in {"true", "1", "yes"}
 
     @property
     def platform(self) -> str:
@@ -47,41 +51,38 @@ class OcnosDriver(DeviceDriver):
     @property
     def lag_prefix(self) -> str:
         return "po"
+    
+    def get_vlans(self) -> dict:
+        pass
 
-    def connect(self):
-        self.conn.open()
+    def connect(self) -> Manager: # type: ignore
+        if hasattr(self, "conn"):
+            return self.conn
+        conn = manager.connect(**self.connection_data)
+        if conn is None:
+            raise ConnectionError("NETCONF connection failed (manager.connect returned None)")
+        return conn
 
-    def disconnect(self):
-        self.conn.close()
+    def disconnect(self) -> None:
+        if self.conn is not None:
+            try:
+                self.conn.close_session()
+            finally:  # Error handling perhaps?
+                self.conn = None
 
-    def _fix_ocnos_xml(self, xml: str) -> str:
-        """
-        Clean up known-broken OCNOS XML before parsing with lxml.
-        Adjust/extend patterns as you discover them.
-        """
-        # 1) Collapse whitespace inside xmlns="" values
-        #    e.g. urn:ietf:params:xml:n s:yang:ietf-netconf-acm -> ...:ns:yang:...
-        xml = re.sub(
-            r'(xmlns(:\w+)?="[^"]*)\s+([^"]*")',
-            lambda m: m.group(1) + m.group(3),  # drop the space(s)
-            xml,
-        )
-        return xml
-
-    def _extract_interfaces(self, interfaces_data):
+    def _extract_interfaces(self, interfaces_data: GetReply) -> list[Interface | Lag]:
         """
         extracts interfaces from the xml response
         """
-        ## another bug in OcNOS...
-        interfaces_data = self._fix_ocnos_xml(interfaces_data)
-        root = etree.fromstring(interfaces_data)
-
         # we will hold vlan subinterfaces here while iterating through interface list
-        vlan_interfaces = {}
+        vlan_interfaces: dict[str, list] = {}
         # and the same thing for lag interfaces
-        lag_interfaces = {}
+        lag_interfaces: dict[str, list] = {}
+        interfaces: list[Interface | Lag] = []
 
-        interfaces = []
+        root: etree._Element | None = interfaces_data.data_ele
+        if root is None:
+            return interfaces
 
         ## work around bug (or a feature??) of OCNOS where some of the interfaces
         # are not returned under the <interfaces> tag but instead they appear
@@ -89,63 +90,83 @@ class OcnosDriver(DeviceDriver):
         # different namespaces so we need to look twice (or use something
         # like [local-name()='interface'] in xpath
         for intf in root.xpath("//*[local-name()='interface']"):
-            name = self._get_text(intf.find(f".//if:name", OCNOS_NS))
-            if name is None:
-                name = self._get_text(intf.find(f".//nc:name", OCNOS_NS))
-            description = self._get_text(intf.find(".//if:description", OCNOS_NS))
-            if description is None:
-                description = self._get_text(intf.find(".//nc:description", OCNOS_NS))
-            logical = self._get_bool(
-                intf.find(".//if:logical", OCNOS_NS), default=False
-            )
-            if logical is None:
-                logical = self._get_bool(
-                    intf.find(".//nc:logical", OCNOS_NS), default=False
+            intf: etree._Element
+
+            intf_name = intf.findtext(".//if:name", None, namespaces=OCNOS_NS) or intf.findtext(".//nc:name", None, namespaces=OCNOS_NS)
+            if intf_name is None:
+                # Ask szymon how he wants to handle errors
+                logger.warning("failed to find interface name in data")
+                logger.debug(
+                    "interface data:\n%s",
+                    etree.tostring(intf, pretty_print=True, encoding="unicode")
                 )
+                continue
 
-            # Encapsulation / VLAN info
-            encapsulation_type = self._get_text(
-                intf.find(".//ife:encapsulation-type", OCNOS_NS)
-            )
-            outer_vlan_id = self._get_text(intf.find(".//ife:outer-vlan-id", OCNOS_NS))
-            aggregate_id = self._get_text(
-                intf.find(".//ifagg:config/ifagg:aggregate-id", OCNOS_NS)
-            )
-            hardware_type = self._get_text(intf.find(".//ife:hardware-type", OCNOS_NS))
+            intf_name = intf_name.strip()
 
-            if aggregate_id is not None:
-                lag_member_of = f"{self.lag_prefix}{aggregate_id}"
+            intf_description = intf.findtext(".//if:description", None, namespaces=OCNOS_NS) or intf.findtext(".//nc:description", None, namespaces=OCNOS_NS)
+            if intf_description:
+                intf_description = intf_description.strip()
+
+            logical_text = (
+                intf.findtext(".//if:logical", None, namespaces=OCNOS_NS)
+                or intf.findtext(".//nc:logical", None, namespaces=OCNOS_NS)
+            )
+
+            intf_logical = (
+                logical_text.strip().lower() in {"true", "1", "yes"}
+                if logical_text is not None
+                else False
+            )
+
+            # # Encapsulation / VLAN info. # Never used
+            # intf_encapsulation_type = intf.findtext(".//ife:encapsulation-type", None, namespaces=OCNOS_NS)
+            intf_outer_vlan_id = intf.findtext(".//ife:outer-vlan-id", None, namespaces=OCNOS_NS)
+            intf_aggregate_id = intf.findtext(".//ifagg:config/ifagg:aggregate-id", None, namespaces=OCNOS_NS)
+            intf_hardware_type = intf.findtext(".//ife:hardware-type", None, namespaces=OCNOS_NS)
+
+            if intf_aggregate_id:
+                lag_member_of = f"{self.lag_prefix}{intf_aggregate_id.strip()}"
+    
                 if lag_member_of not in lag_interfaces:
                     lag_interfaces[lag_member_of] = []
-                lag_interfaces[lag_member_of].append(name)
+
+                lag_interfaces[lag_member_of].append(intf_name)
             else:
                 lag_member_of = None
 
-            if logical is True:
-                physical_if_name, _ = name.rsplit(".", 1)
-                if outer_vlan_id is None:
+            if intf_logical is True:
+                physical_if_name, _ = intf_name.rsplit(".", 1)
+
+                if not intf_outer_vlan_id:
                     logger.warning(
-                        f"Logical interface {name} has no outer VLAN ID, skipping"
+                        logger.warning(f"Logical interface {intf_name} has no outer VLAN ID, skipping")
                     )
                     continue
+
                 if physical_if_name not in vlan_interfaces:
                     vlan_interfaces[physical_if_name] = []
+
                 # store vlan subinterface for later processing
                 logger.info(
-                    f"adding VLAN {outer_vlan_id} to interface {physical_if_name}"
+                    f"adding VLAN {intf_outer_vlan_id} to interface {physical_if_name}"
                 )
                 vlan_interfaces[physical_if_name].append(
-                    Vlan(vlan_id=int(outer_vlan_id), name=description or "")
+                    Vlan(
+                        vlan_id=int(intf_outer_vlan_id),
+                        name=intf_description, # Originally had a or "" is it needed?
+                        s_tag = None,
+                    )
                 )
                 continue
 
             try:
-                if hardware_type == "AGG":
-                    logging.info(f"adding LAG interface {name}")
+                if intf_hardware_type == "AGG":
+                    logging.info(f"adding LAG interface {intf_name}")
                     interfaces.append(
                         Lag(
-                            name=name,
-                            description=description,
+                            name=intf_name,
+                            description=intf_description,
                             trunk_vlans=[],
                             access_vlan=None,
                         )
@@ -153,8 +174,8 @@ class OcnosDriver(DeviceDriver):
                 else:
                     interfaces.append(
                         Interface(
-                            name=name,
-                            description=description,
+                            name=intf_name,
+                            description=intf_description,
                             trunk_vlans=[],
                             access_vlan=None,
                             lag_member_of=lag_member_of,
@@ -162,30 +183,37 @@ class OcnosDriver(DeviceDriver):
                     )
             except Exception as e:
                 logger.error(
-                    f"Error creating Interface object for {name}: {e}, {etree.tostring(intf)}"
+                    f"Error creating Interface object for {intf_description}: {e}, {etree.tostring(intf)}"
                 )
 
         for interface in interfaces:
             if interface.name in lag_interfaces:
                 if isinstance(interface, Lag):
                     interface.members = lag_interfaces[interface.name]
+
             if interface.name in vlan_interfaces:
-                interface.trunk_vlans = [
-                    vlan for vlan in vlan_interfaces[interface.name]
-                ]
+                interface.trunk_vlans = vlan_interfaces[interface.name]
+
         return interfaces
 
     def get_config(self) -> str:
         """
-        Retrieves the whole config. This is mostly useful for testing
+        Retrieves the whole config (running by default) via NETCONF.
+        Returns the raw XML payload as a string, or "" on failure.
         """
         try:
-            return self.conn.get_config()
+            reply = self.conn.get_config(source="running")
+            return reply.data_xml or ""
+
+        except RPCError as e:
+            # NETCONF server returned an <rpc-error>
+            logger.error("NETCONF RPC error while getting config: %s", e)
+            return ""
         except Exception as e:
-            logger.error(f"Failed to get configuration: {e}")
+            logger.exception("Failed to get configuration: %s", e)
             return ""
 
-    def _extract_system_macs(self, evpn_data):
+    def _extract_system_macs(self, evpn_data: GetReply) -> dict[str, str] | None:
         """
                 extracts system macs from the evpn xml response
 
@@ -209,225 +237,264 @@ class OcnosDriver(DeviceDriver):
           </data>
         </rpc-reply>
         """
-        evpn_data = self._fix_ocnos_xml(evpn_data)
-        root = etree.fromstring(evpn_data)
-
         system_macs = {}
+        root: etree._Element | None = evpn_data.data_ele
+        if root is None:
+            return system_macs
+
         ns = {"evpn": "http://www.ipinfusion.com/yang/ocnos/ipi-ethernet-vpn"}
 
         for intf in root.xpath("//*[local-name()='interface']"):
-            name = self._get_text(intf.find(f".//evpn:name", ns))
-            system_mac = self._get_text(intf.find(".//evpn:system-mac", ns))
+            intf: etree._Element
+            name = intf.findtext(".//evpn:name", None, namespaces=ns)
+            system_mac = intf.findtext(".//evpn:system-mac", None, namespaces=ns)
             if system_mac:
                 system_macs[name] = system_mac
+
         return system_macs
 
-    def get_interfaces(self) -> Dict[str, Interface]:
-        """
-        Retrieves interfaces from OcNOS using Netconf.
-        """
-        # Filter to get interface configuration/state
-        # Note: Actual filter depends on OcNOS YANG model. Using a broad filter or subtree for now.
-        # Assuming IETF interfaces or OcNOS specific model.
-        # For this implementation, we'll assume a standard structure similar to what we build.
+#     def get_vlans(self) -> Dict[int, Vlan]:
+#         """
+#         return all vlans found on all interfaces
+#         XXX this doesn't include any access vlans since we're currently not collecting them
+#         """
+#         vlans = []
+#         interfaces = self.get_interfaces()
+#         for intf in interfaces:
+#             for vlan in intf.trunk_vlans:
+#                 vlans.append(vlan)
+#         return vlans
 
-        # Using a simple subtree filter for interfaces
-        filter_ = """
-        <interfaces xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-interface">
-        </interfaces>
+    def get_interfaces(self) -> list[Interface | Lag]:
+        if self.conn is None or not self.conn.connected: # consider making this a decorator?
+            raise ConnectionError("Not connected to device")
+
+        interfaces_subtree = """
+        <interfaces xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-interface"/>
         """
 
         evpn_filter = """
-  <evpn xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-ethernet-vpn">
-    <interfaces>
-    </interfaces>
-  </evpn>
+        <evpn xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-ethernet-vpn">
+            <interfaces>
+            </interfaces>
+        </evpn>
         """
+
         try:
-            response = self.conn.get(filter_=filter_)
-            response.raise_for_status()
+            interfaces_filter = ("subtree", interfaces_subtree)
+            evpn_filter = ("subtree", evpn_filter)
 
-            evpn_response = self.conn.get(filter_=evpn_filter)
-            evpn_response.raise_for_status()
+            interfaces_reply: GetReply = self.conn.get(filter=interfaces_filter)
+            evpn_reply: GetReply = self.conn.get(filter=evpn_filter)
+            interfaces = self._extract_interfaces(interfaces_reply)
+            system_macs = self._extract_system_macs(evpn_reply) or {}
+                      
+            for iface in interfaces:
+                if not isinstance(iface, Lag):
+                    continue
+    
+                mac = system_macs.get(iface.name)
+                if mac:
+                    iface.system_mac = mac
 
-            interfaces = self._extract_interfaces(response.result)
-            system_macs = self._extract_system_macs(evpn_response.result)
-            for interface in interfaces:
-                if interface.name in system_macs:
-                    interface.system_mac = system_macs[interface.name]
             return interfaces
+
         except Exception as e:
-            logger.error(f"Failed to get interfaces: {e}")
+            logger.exception(f"Failed to get interfaces: {e}")
             raise
 
-    def get_vlans(self) -> Dict[int, Vlan]:
-        """
-        return all vlans found on all interfaces
-        XXX this doesn't include any access vlans since we're currently not collecting them
-        """
-        vlans = []
-        interfaces = self.get_interfaces()
-        for intf in interfaces:
-            for vlan in intf.trunk_vlans:
-                vlans.append(vlan)
-        return vlans
+#     def get_system_macs(self) -> List[str]:
+#         """
+#         return all system macs found on lag interfaces
+#         """
+#         system_macs = []
+#         interfaces = self.get_interfaces()
+#         for intf in interfaces:
+#             if isinstance(intf, Lag) and intf.system_mac:
+#                 system_macs.append(intf.system_mac)
+#         return system_macs
 
     def get_system_macs(self) -> List[str]:
-        """
-        return all system macs found on lag interfaces
-        """
-        system_macs = []
-        interfaces = self.get_interfaces()
-        for intf in interfaces:
-            if isinstance(intf, Lag) and intf.system_mac:
-                system_macs.append(intf.system_mac)
-        return system_macs
+        pass
+
+#     def get_vnis(self) -> List[int]:
+#         """
+#                 Retrieves VNIs from OcNOS using Netconf.
+
+#           <vxlan xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-vxlan"><global><config><enable-vxlan/><vtep-ipv4>10.0.10.4</vtep-ipv4></config></global>obal&gt;
+#           <vxlan-tenants><vxlan-tenant><vxlan-identifier>99</vxlan-identifier><config><vxlan-identifier>99</vxlan-identifier><tenant-type>ingress-replication</tenant-type><vrf-name>so12345</vrf-name></config></vxlan-tenant></vxlan-tenants>
+#         </vxlan>
+
+#         """
+
+#         filter_ = """
+#         <vxlan xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-vxlan">
+#         </vxlan>
+#         """
+#         vnis = []
+#         try:
+#             response = self.conn.get(filter_=filter_)
+#             if not response.result:
+#                 return []
+
+#             vxlan_data = self._fix_ocnos_xml(response.result)
+#             root = etree.fromstring(vxlan_data)
+
+#             ns = {"vxlan": "http://www.ipinfusion.com/yang/ocnos/ipi-vxlan"}
+
+#             for vxlan in root.find(".//vxlan:vxlan-tenant", ns):
+#                 vni = self._get_text(vxlan.find(f".//vxlan:vxlan-identifier", ns))
+#                 if vni:
+#                     vnis.append(int(vni))
+
+#             return list(set(vnis))
+#         except Exception as e:
+#             logger.error(f"Failed to get VNIs: {e}")
+#             return {}
 
     def get_vnis(self) -> List[int]:
-        """
-                Retrieves VNIs from OcNOS using Netconf.
+        pass
 
-          <vxlan xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-vxlan"><global><config><enable-vxlan/><vtep-ipv4>10.0.10.4</vtep-ipv4></config></global>obal&gt;
-          <vxlan-tenants><vxlan-tenant><vxlan-identifier>99</vxlan-identifier><config><vxlan-identifier>99</vxlan-identifier><tenant-type>ingress-replication</tenant-type><vrf-name>so12345</vrf-name></config></vxlan-tenant></vxlan-tenants>
-        </vxlan>
+#     def _normalize_xml(self, xml_str: str) -> str:
+#         """
+#         Normalizes XML string for comparison by removing insignificant whitespace.
+#         """
+#         # fix Ocnos bug:
+#         xml_str = self._fix_ocnos_xml(xml_str)
+#         parser = etree.XMLParser(remove_blank_text=True)
+#         tree = etree.fromstring(xml_str.encode(), parser)
+#         return etree.tostring(tree, pretty_print=True).decode()
 
-        """
+#     def _compute_diff(self, running_cfg: str, candidate_cfg: str) -> str:
+#         normalized_running = self._normalize_xml(running_cfg)
+#         normalized_candidate = self._normalize_xml(candidate_cfg)
+#         running_lines = normalized_running.splitlines(keepends=True)
+#         candidate_lines = normalized_candidate.splitlines(keepends=True)
+#         diff_lines = difflib.unified_diff(
+#             running_lines,
+#             candidate_lines,
+#             fromfile="running-config",
+#             tofile="candidate-config",
+#         )
+#         return "".join(diff_lines)
 
-        filter_ = """
-        <vxlan xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-vxlan">
-        </vxlan>
-        """
-        vnis = []
-        try:
-            response = self.conn.get(filter_=filter_)
-            if not response.result:
-                return []
+#     def push_config(self, commands: List[str], dry_run: bool = False) -> str:
+#         """
+#         Pushes configuration to OcNOS.
+#         For Netconf, 'commands' is expected to be a list containing a single XML string
+#         (since our renderer now returns [xml_string]).
+#         """
+#         if commands is None or len(commands) == 0:
+#             logger.info("No commands to push")
+#             return ""
+#         try:
+#             logger.info(f"retrieved running config from {self.conn.host}")
+#             running_cfg = self.conn.get_config(source="running")
 
-            vxlan_data = self._fix_ocnos_xml(response.result)
-            root = etree.fromstring(vxlan_data)
+#             logger.info(f"locking candidate config on {self.conn.host}")
+#             resp = self.conn.lock(target="candidate")
+#             resp.raise_for_status()
 
-            ns = {"vxlan": "http://www.ipinfusion.com/yang/ocnos/ipi-vxlan"}
+#             for cmd in commands:
+#                 logger.info(f"applying config to candidate on {self.conn.host}:\n{cmd}")
+#                 resp = self.conn.edit_config(config=cmd, target="candidate")
+#                 print(f"edit_config response: {resp.result}")
+#                 resp.raise_for_status()
 
-            for vxlan in root.find(".//vxlan:vxlan-tenant", ns):
-                vni = self._get_text(vxlan.find(f".//vxlan:vxlan-identifier", ns))
-                if vni:
-                    vnis.append(int(vni))
+#             candidate_cfg = self.conn.get_config(source="candidate")
 
-            return list(set(vnis))
-        except Exception as e:
-            logger.error(f"Failed to get VNIs: {e}")
-            return {}
+#             # OCNOS produces all sorts of broken XML:
+#             # - spaces in namespace URIs
+#             #  <nacm xmlns="urn:ietf:params:xml:n s:yang:ietf-netconf-acm">
+#             #    </nacm>
+#             # - randomly quoted tags:
+#             # <safi>unicast
+#             #   /safi&gt;
+#             #    <activate/>
+#             #  </safi>
+#             #       <config><afi>l2vpn</afi><safi>evpn</safi><activate/>
+#             # /config&gt;
+#             #       </config>
 
-    def _normalize_xml(self, xml_str: str) -> str:
-        """
-        Normalizes XML string for comparison by removing insignificant whitespace.
-        """
-        # fix Ocnos bug:
-        xml_str = self._fix_ocnos_xml(xml_str)
-        parser = etree.XMLParser(remove_blank_text=True)
-        tree = etree.fromstring(xml_str.encode(), parser)
-        return etree.tostring(tree, pretty_print=True).decode()
+#             # So for now we'll just compute a text diff instead of XML diff
+#             # diff = xmldiff.diff_trees(etree.fromstring(running_cfg.result.replace("urn:ietf:params:xml:n s:yang:ietf-netconf-acm", "urn:ietf:params:xml:ns:yang:ietf-netconf-acm")), etree.fromstring(candidate_cfg.result.replace("urn:ietf:params:xml:n s:yang:ietf-netconf-acm", "urn:ietf:params:xml:ns:yang:ietf-netconf-acm")))
 
-    def _compute_diff(self, running_cfg: str, candidate_cfg: str) -> str:
-        normalized_running = self._normalize_xml(running_cfg)
-        normalized_candidate = self._normalize_xml(candidate_cfg)
-        running_lines = normalized_running.splitlines(keepends=True)
-        candidate_lines = normalized_candidate.splitlines(keepends=True)
-        diff_lines = difflib.unified_diff(
-            running_lines,
-            candidate_lines,
-            fromfile="running-config",
-            tofile="candidate-config",
-        )
-        return "".join(diff_lines)
+#             diff = self._compute_diff(running_cfg.result, candidate_cfg.result)
+#             # logger.info(f"computed config diff on {self.conn.host}:\n{diff}")
+#             if dry_run:
+#                 logger.info(f"dry run enabled, discarding changes on {self.conn.host}")
+#                 self.conn.discard()
+#                 return diff
+#             else:
+#                 response = self.conn.commit()
+#                 response.raise_for_status()
+#             # XXX this does nothing
+#             r = self.conn.copy_config(source="running", target="startup")
+#             r.raise_for_status()
+#             self.conn.unlock(target="candidate")
+#             return diff
+#         except Exception as e:
+#             logger.error(
+#                 f"Failed to push config commands: {e}. Discarding changes on {self.conn.host}"
+#             )
+#             self.conn.discard()
+#             self.conn.unlock(target="candidate")
+#             raise
 
     def push_config(self, commands: List[str], dry_run: bool = False) -> str:
-        """
-        Pushes configuration to OcNOS.
-        For Netconf, 'commands' is expected to be a list containing a single XML string
-        (since our renderer now returns [xml_string]).
-        """
-        if commands is None or len(commands) == 0:
-            logger.info("No commands to push")
-            return ""
-        try:
-            logger.info(f"retrieved running config from {self.conn.host}")
-            running_cfg = self.conn.get_config(source="running")
+        pass
 
-            logger.info(f"locking candidate config on {self.conn.host}")
-            resp = self.conn.lock(target="candidate")
-            resp.raise_for_status()
 
-            for cmd in commands:
-                logger.info(f"applying config to candidate on {self.conn.host}:\n{cmd}")
-                resp = self.conn.edit_config(config=cmd, target="candidate")
-                print(f"edit_config response: {resp.result}")
-                resp.raise_for_status()
+#     def push_interface(
+#         self, interface: Interface, delete: bool = False, dry_run: bool = False
+#     ) -> str:
+#         """
+#         Pushes interface configuration to OcNOS.
+#         """
 
-            candidate_cfg = self.conn.get_config(source="candidate")
+#         config_xml = (
+#             self.renderer.render_interface_delete(interface)
+#             if delete
+#             else self.renderer.render_interface(interface)
+#         )
+#         return self.push_config([config_xml], dry_run=dry_run)
 
-            # OCNOS produces all sorts of broken XML:
-            # - spaces in namespace URIs
-            #  <nacm xmlns="urn:ietf:params:xml:n s:yang:ietf-netconf-acm">
-            #    </nacm>
-            # - randomly quoted tags:
-            # <safi>unicast
-            #   /safi&gt;
-            #    <activate/>
-            #  </safi>
-            #       <config><afi>l2vpn</afi><safi>evpn</safi><activate/>
-            # /config&gt;
-            #       </config>
-
-            # So for now we'll just compute a text diff instead of XML diff
-            # diff = xmldiff.diff_trees(etree.fromstring(running_cfg.result.replace("urn:ietf:params:xml:n s:yang:ietf-netconf-acm", "urn:ietf:params:xml:ns:yang:ietf-netconf-acm")), etree.fromstring(candidate_cfg.result.replace("urn:ietf:params:xml:n s:yang:ietf-netconf-acm", "urn:ietf:params:xml:ns:yang:ietf-netconf-acm")))
-
-            diff = self._compute_diff(running_cfg.result, candidate_cfg.result)
-            # logger.info(f"computed config diff on {self.conn.host}:\n{diff}")
-            if dry_run:
-                logger.info(f"dry run enabled, discarding changes on {self.conn.host}")
-                self.conn.discard()
-                return diff
-            else:
-                response = self.conn.commit()
-                response.raise_for_status()
-            # XXX this does nothing
-            r = self.conn.copy_config(source="running", target="startup")
-            r.raise_for_status()
-            self.conn.unlock(target="candidate")
-            return diff
-        except Exception as e:
-            logger.error(
-                f"Failed to push config commands: {e}. Discarding changes on {self.conn.host}"
-            )
-            self.conn.discard()
-            self.conn.unlock(target="candidate")
-            raise
 
     def push_interface(
         self, interface: Interface, delete: bool = False, dry_run: bool = False
     ) -> str:
-        """
-        Pushes interface configuration to OcNOS.
-        """
+        pass
 
-        config_xml = (
-            self.renderer.render_interface_delete(interface)
-            if delete
-            else self.renderer.render_interface(interface)
-        )
-        return self.push_config([config_xml], dry_run=dry_run)
+#     def push_lag(self, lag: Lag, delete: bool = False, dry_run: bool = False) -> str:
+#         """
+#         Pushes lag configuration to OcNOS.
+#         """
+#         config_xml = (
+#             self.renderer.render_lag_delete(lag)
+#             if delete
+#             else self.renderer.render_lag(lag)
+#         )
+#         return self.push_config([config_xml], dry_run=dry_run)
 
     def push_lag(self, lag: Lag, delete: bool = False, dry_run: bool = False) -> str:
-        """
-        Pushes lag configuration to OcNOS.
-        """
-        config_xml = (
-            self.renderer.render_lag_delete(lag)
-            if delete
-            else self.renderer.render_lag(lag)
-        )
-        return self.push_config([config_xml], dry_run=dry_run)
+        pass
+
+#     def push_vlan(
+#         self,
+#         interface: Interface,
+#         vlan: Vlan,
+#         delete: bool = False,
+#         dry_run: bool = False,
+#     ) -> str:
+#         """
+#         Pushes vlan configuration to OcNOS.
+#         """
+#         config_xml = (
+#             self.renderer.render_vlan_delete(interface, vlan)
+#             if delete
+#             else self.renderer.render_vlan(interface, vlan)
+#         )
+#         return self.push_config([config_xml], dry_run=dry_run)
 
     def push_vlan(
         self,
@@ -436,15 +503,24 @@ class OcnosDriver(DeviceDriver):
         delete: bool = False,
         dry_run: bool = False,
     ) -> str:
-        """
-        Pushes vlan configuration to OcNOS.
-        """
-        config_xml = (
-            self.renderer.render_vlan_delete(interface, vlan)
-            if delete
-            else self.renderer.render_vlan(interface, vlan)
-        )
-        return self.push_config([config_xml], dry_run=dry_run)
+        pass
+
+#     def push_evpn(
+#         self,
+#         interface: Interface,
+#         evpn: Evpn,
+#         delete: bool = False,
+#         dry_run: bool = False,
+#     ) -> str:
+#         """
+#         Pushes evpn configuration to OcNOS.
+#         """
+#         config_xml = (
+#             self.renderer.render_evpn_delete(interface, evpn)
+#             if delete
+#             else self.renderer.render_evpn(interface, evpn)
+#         )
+#         return self.push_config([config_xml], dry_run=dry_run)
 
     def push_evpn(
         self,
@@ -453,12 +529,4 @@ class OcnosDriver(DeviceDriver):
         delete: bool = False,
         dry_run: bool = False,
     ) -> str:
-        """
-        Pushes evpn configuration to OcNOS.
-        """
-        config_xml = (
-            self.renderer.render_evpn_delete(interface, evpn)
-            if delete
-            else self.renderer.render_evpn(interface, evpn)
-        )
-        return self.push_config([config_xml], dry_run=dry_run)
+        pass

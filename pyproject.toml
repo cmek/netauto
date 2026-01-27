@@ -10,12 +10,14 @@ requires-python = ">=3.12"
 dependencies = [
     "jinja2>=3.1.6",
     "jsonrpclib>=0.2.1",
+    "ncclient>=0.7.0",
     "paramiko>=4.0.0",
     "pydantic>=2.12.4",
     "pyeapi>=1.0.4",
     "scrapli>=2025.1.30",
     "scrapli-community>=2025.1.30",
     "scrapli-netconf>=2025.1.30",
+    "types-lxml>=2026.1.1",
 ]
 
 [project.scripts]
