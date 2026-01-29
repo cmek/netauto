@@ -1,4 +1,4 @@
-from typing import List, Optional, Literal
+from typing import  Optional, Literal
 from pydantic import BaseModel, Field
 
 
@@ -16,13 +16,13 @@ class Interface(BaseModel):
     mode: Literal["access", "trunk", "routed"] = "access"
     # For switchports
     access_vlan: Optional[int] = None
-    trunk_vlans: List[Vlan] = Field(default_factory=list)
+    trunk_vlans: list[Vlan] = Field(default_factory=list)
     # For LAG
     lag_member_of: Optional[str] = None  # Name of the Port-Channel
 
 
 class Lag(Interface):
-    members: List[Interface] = Field(default_factory=list)
+    members: list[Interface] = Field(default_factory=list)
     lacp_mode: Literal["active", "passive", "static"] = "active"
     min_links: int = 1
     # this is for tracking mac vrf
@@ -33,8 +33,8 @@ class Lag(Interface):
 class Vrf(BaseModel):
     name: str
     rd: str
-    rt_import: List[str]
-    rt_export: List[str]
+    rt_import: list[str]
+    rt_export: list[str]
 
 
 class Connection(BaseModel):
@@ -50,4 +50,4 @@ class Evpn(BaseModel):
 
 
 class EvpnService(Evpn):
-    connections: List[Connection]
+    connections: list[Connection]
