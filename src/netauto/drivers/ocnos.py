@@ -67,20 +67,17 @@ class OcnosDriver(DeviceDriver):
 #         return vlans
 
 
-    def connect(self) -> Manager: # type: ignore
+    def connect(self) -> Manager:
         if hasattr(self, "conn"):
             return self.conn
-        conn = manager.connect(**self.connection_data)
+        conn: Manager | None = manager.connect(**self.connection_data)
         if conn is None:
             raise ConnectionError("NETCONF connection failed (manager.connect returned None)")
         return conn
 
     def disconnect(self) -> None:
         if self.conn is not None:
-            try:
-                self.conn.close_session()
-            finally:  # Error handling perhaps?
-                self.conn = None
+            self.conn.close_session()
 
     def _extract_interfaces(self, interfaces_data: GetReply) -> list[Interface | Lag]:
         """
