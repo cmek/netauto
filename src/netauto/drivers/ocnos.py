@@ -379,69 +379,6 @@ class OcnosDriver(DeviceDriver):
             logger.exception("Failed to get VNIs: %s", e)
             return []
 
-#     def push_config(self, commands: List[str], dry_run: bool = False) -> str:
-#         """
-#         Pushes configuration to OcNOS.
-#         For Netconf, 'commands' is expected to be a list containing a single XML string
-#         (since our renderer now returns [xml_string]).
-#         """
-#         if commands is None or len(commands) == 0:
-#             logger.info("No commands to push")
-#             return ""
-#         try:
-#             logger.info(f"retrieved running config from {self.conn.host}")
-#             running_cfg = self.conn.get_config(source="running")
-
-#             logger.info(f"locking candidate config on {self.conn.host}")
-#             resp = self.conn.lock(target="candidate")
-#             resp.raise_for_status()
-
-#             for cmd in commands:
-#                 logger.info(f"applying config to candidate on {self.conn.host}:\n{cmd}")
-#                 resp = self.conn.edit_config(config=cmd, target="candidate")
-#                 print(f"edit_config response: {resp.result}")
-#                 resp.raise_for_status()
-
-#             candidate_cfg = self.conn.get_config(source="candidate")
-
-#             # OCNOS produces all sorts of broken XML:
-#             # - spaces in namespace URIs
-#             #  <nacm xmlns="urn:ietf:params:xml:n s:yang:ietf-netconf-acm">
-#             #    </nacm>
-#             # - randomly quoted tags:
-#             # <safi>unicast
-#             #   /safi&gt;
-#             #    <activate/>
-#             #  </safi>
-#             #       <config><afi>l2vpn</afi><safi>evpn</safi><activate/>
-#             # /config&gt;
-#             #       </config>
-
-#             # So for now we'll just compute a text diff instead of XML diff
-#             # diff = xmldiff.diff_trees(etree.fromstring(running_cfg.result.replace("urn:ietf:params:xml:n s:yang:ietf-netconf-acm", "urn:ietf:params:xml:ns:yang:ietf-netconf-acm")), etree.fromstring(candidate_cfg.result.replace("urn:ietf:params:xml:n s:yang:ietf-netconf-acm", "urn:ietf:params:xml:ns:yang:ietf-netconf-acm")))
-
-#             diff = self._compute_diff(running_cfg.result, candidate_cfg.result)
-#             # logger.info(f"computed config diff on {self.conn.host}:\n{diff}")
-#             if dry_run:
-#                 logger.info(f"dry run enabled, discarding changes on {self.conn.host}")
-#                 self.conn.discard()
-#                 return diff
-#             else:
-#                 response = self.conn.commit()
-#                 response.raise_for_status()
-#             # XXX this does nothing
-#             r = self.conn.copy_config(source="running", target="startup")
-#             r.raise_for_status()
-#             self.conn.unlock(target="candidate")
-#             return diff
-#         except Exception as e:
-#             logger.error(
-#                 f"Failed to push config commands: {e}. Discarding changes on {self.conn.host}"
-#             )
-#             self.conn.discard()
-#             self.conn.unlock(target="candidate")
-#             raise
-
     def push_config(self, commands: List[str], dry_run: bool = False) -> str:
         """
         Pushes configuration to OcNOS using ncclient.
@@ -548,15 +485,6 @@ class OcnosDriver(DeviceDriver):
             else self.renderer.render_vlan(interface, vlan)
         )
         return self.push_config([config_xml], dry_run=dry_run)
-
-    def push_vlan(
-        self,
-        interface: Interface,
-        vlan: Vlan,
-        delete: bool = False,
-        dry_run: bool = False,
-    ) -> str:
-        pass
 
     def push_evpn(
         self,
