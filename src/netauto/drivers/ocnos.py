@@ -227,9 +227,9 @@ class OcnosDriver(DeviceDriver):
 
     def _extract_system_macs(self, evpn_data: GetReply) -> dict[str, str] | None:
         """
-                extracts system macs from the evpn xml response
+        extracts system macs from the evpn xml response
 
-                <rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="105" last-modified="2025-11-24T17:03:02Z">
+        <rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="105" last-modified="2025-11-24T17:03:02Z">
           <data>
             <evpn xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-ethernet-vpn">
               <interfaces>
