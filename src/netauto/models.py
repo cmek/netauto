@@ -51,3 +51,6 @@ class Evpn(BaseModel):
 
 class EvpnService(Evpn):
     connections: list[Connection]
+    vlan_id: int
+    vni: int
+    vrf_name: str
