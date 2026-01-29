@@ -1,3 +1,4 @@
+from jsonrpclib import config
 from .base import DeviceDriver
 # from scrapli_netconf.driver import NetconfDriver as ScrapliNetconfDriver
 import re
@@ -17,7 +18,7 @@ from ncclient.operations import RPCError
 
 logger = logging.getLogger(__name__)
 
-OCNOS_NS = {
+OCNOS_NS: dict[str, str] = {
     "if": "http://www.ipinfusion.com/yang/ocnos/ipi-interface",
     "ife": "http://www.ipinfusion.com/yang/ocnos/ipi-if-extended",
     "ife2": "http://www.ipinfusion.com/yang/ocnos/ipi-if-ethernet",
@@ -53,7 +54,6 @@ class OcnosDriver(DeviceDriver):
     def lag_prefix(self) -> str:
         return "po"
     
-
 #     def get_vlans(self) -> Dict[int, Vlan]:
 #         """
 #         return all vlans found on all interfaces
@@ -78,6 +78,27 @@ class OcnosDriver(DeviceDriver):
     def disconnect(self) -> None:
         if self.conn is not None:
             self.conn.close_session()
+
+    def _compute_diff(self, running_cfg: str, candidate_cfg: str) -> str:
+        def _normalize_xml(xml_str: str) -> str:
+            """
+            Normalizes XML string for comparison by removing insignificant whitespace.
+            """
+            parser = etree.XMLParser(remove_blank_text=True)
+            tree = etree.fromstring(xml_str.encode(), parser)
+            return etree.tostring(tree, pretty_print=True).decode()
+            
+        normalized_running = _normalize_xml(running_cfg)
+        normalized_candidate = _normalize_xml(candidate_cfg)
+        running_lines = normalized_running.splitlines(keepends=True)
+        candidate_lines = normalized_candidate.splitlines(keepends=True)
+        diff_lines = difflib.unified_diff(
+            running_lines,
+            candidate_lines,
+            fromfile="running-config",
+            tofile="candidate-config",
+        )
+        return "".join(diff_lines)
 
     def _extract_interfaces(self, interfaces_data: GetReply) -> list[Interface | Lag]:
         """
@@ -329,7 +350,7 @@ class OcnosDriver(DeviceDriver):
         """
     
         try:
-            vxlan_filter = ("subtree", vxlan_subtree)
+            vxlan_filter: tuple[str, str] = ("subtree", vxlan_subtree)
             vxlan_reply: GetReply = self.conn.get(filter=vxlan_filter)
 
             root: etree._Element | None = vxlan_reply.data_ele
@@ -340,7 +361,7 @@ class OcnosDriver(DeviceDriver):
 
             for tenant in root.xpath(".//vxlan:vxlan-tenant", namespaces=OCNOS_NS):
                 tenant: etree._Element
-                vni_text = tenant.findtext(".//*[local-name()='vxlan-identifier']", None, namespaces=OCNOS_NS)
+                vni_text: str | None = tenant.findtext(".//*[local-name()='vxlan-identifier']", None, namespaces=OCNOS_NS)
     
                 if not vni_text:
                     continue
@@ -422,59 +443,111 @@ class OcnosDriver(DeviceDriver):
 #             raise
 
     def push_config(self, commands: List[str], dry_run: bool = False) -> str:
-        pass
+        """
+        Pushes configuration to OcNOS using ncclient.
 
+        For NETCONF, `commands` is expected to be a list of XML config payload strings.
+        Many renderers return [xml_string], but multiple payloads are supported.
+        """
+        if not commands:
+            logger.info("No commands to push")
+            return ""
 
-#     def push_interface(
-#         self, interface: Interface, delete: bool = False, dry_run: bool = False
-#     ) -> str:
-#         """
-#         Pushes interface configuration to OcNOS.
-#         """
+        locked = False
+        try:
+            running_reply = self.conn.get_config(source="running")
+            logger.debug("retrieved running config")
+            running_xml = getattr(running_reply, "data_xml", None) or running_reply.xml
 
-#         config_xml = (
-#             self.renderer.render_interface_delete(interface)
-#             if delete
-#             else self.renderer.render_interface(interface)
-#         )
-#         return self.push_config([config_xml], dry_run=dry_run)
+            logger.info("locking candidate config")
+            self.conn.lock(target="candidate")
+            locked = True
+
+            for cmd in commands:
+                logger.info("applying config to candidate '%s'", cmd)
+                edit_reply = self.conn.edit_config(target="candidate", config=cmd)
+
+                if hasattr(edit_reply, "ok") and edit_reply.ok is False:
+                    raise RPCError(edit_reply.xml)
+
+            candidate_reply = self.conn.get_config(source="candidate")
+            candidate_xml = getattr(candidate_reply, "data_xml", None) or candidate_reply.xml
+
+            diff = self._compute_diff(running_xml, candidate_xml)
+
+            if dry_run:
+                logger.info("dry run enabled, discarding changes")
+                self.conn.discard_changes()
+                return diff
+
+            logger.info("committing candidate config")
+            self.conn.commit()
+
+            try:
+                logger.info("copying running to startup")
+                self.conn.copy_config(source="running", target="startup")
+            except RPCError as e:
+                logger.warning("copy_config running->startup failed on '%s'", e)
+
+            return diff
+
+        except Exception as e:
+            logger.error("Failed to push config commands. '%s'", e)
+            try:
+                self.conn.discard_changes()
+            except Exception:
+                pass
+            raise
+
+        finally:
+            if locked:
+                try:
+                    self.conn.unlock(target="candidate")
+                except Exception:
+                    pass
 
 
     def push_interface(
         self, interface: Interface, delete: bool = False, dry_run: bool = False
     ) -> str:
-        pass
+        """
+        Pushes interface configuration to OcNOS.
+        """
+        config_xml: list[str] = (
+            self.renderer.render_interface_delete(interface)
+            if delete
+            else self.renderer.render_interface(interface)
+        )
+        return self.push_config([config_xml], dry_run=dry_run)
 
-#     def push_lag(self, lag: Lag, delete: bool = False, dry_run: bool = False) -> str:
-#         """
-#         Pushes lag configuration to OcNOS.
-#         """
-#         config_xml = (
-#             self.renderer.render_lag_delete(lag)
-#             if delete
-#             else self.renderer.render_lag(lag)
-#         )
-#         return self.push_config([config_xml], dry_run=dry_run)
 
     def push_lag(self, lag: Lag, delete: bool = False, dry_run: bool = False) -> str:
-        pass
+        """
+        Pushes lag configuration to OcNOS.
+        """
+        config_xml = (
+            self.renderer.render_lag_delete(lag)
+            if delete
+            else self.renderer.render_lag(lag)
+        )
+        return self.push_config([config_xml], dry_run=dry_run)
 
-#     def push_vlan(
-#         self,
-#         interface: Interface,
-#         vlan: Vlan,
-#         delete: bool = False,
-#         dry_run: bool = False,
-#     ) -> str:
-#         """
-#         Pushes vlan configuration to OcNOS.
-#         """
-#         config_xml = (
-#             self.renderer.render_vlan_delete(interface, vlan)
-#             if delete
-#             else self.renderer.render_vlan(interface, vlan)
-#         )
-#         return self.push_config([config_xml], dry_run=dry_run)
+    def push_vlan(
+        self,
+        interface: Interface,
+        vlan: Vlan,
+        delete: bool = False,
+        dry_run: bool = False,
+    ) -> str:
+        """
+        Pushes vlan configuration to OcNOS.
+        """
+        config_xml = (
+            self.renderer.render_vlan_delete(interface, vlan)
+            if delete
+            else self.renderer.render_vlan(interface, vlan)
+        )
+        return self.push_config([config_xml], dry_run=dry_run)
 
     def push_vlan(
         self,
@@ -485,23 +558,6 @@ class OcnosDriver(DeviceDriver):
     ) -> str:
         pass
 
-#     def push_evpn(
-#         self,
-#         interface: Interface,
-#         evpn: Evpn,
-#         delete: bool = False,
-#         dry_run: bool = False,
-#     ) -> str:
-#         """
-#         Pushes evpn configuration to OcNOS.
-#         """
-#         config_xml = (
-#             self.renderer.render_evpn_delete(interface, evpn)
-#             if delete
-#             else self.renderer.render_evpn(interface, evpn)
-#         )
-#         return self.push_config([config_xml], dry_run=dry_run)
-
     def push_evpn(
         self,
         interface: Interface,
@@ -509,4 +565,12 @@ class OcnosDriver(DeviceDriver):
         delete: bool = False,
         dry_run: bool = False,
     ) -> str:
-        pass
+        """
+        Pushes evpn configuration to OcNOS.
+        """
+        config_xml = (
+            self.renderer.render_evpn_delete(interface, evpn)
+            if delete
+            else self.renderer.render_evpn(interface, evpn)
+        )
+        return self.push_config([config_xml], dry_run=dry_run)
