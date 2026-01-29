@@ -1,20 +1,14 @@
-from jsonrpclib import config
-from .base import DeviceDriver
-# from scrapli_netconf.driver import NetconfDriver as ScrapliNetconfDriver
-import re
-from netauto.models import Interface, Vlan, Lag, Evpn
-from typing import List, Dict
 import difflib
-
-import xml.etree.ElementTree as ET
-from lxml import etree
-from netauto.render import OcnosDeviceRenderer
 import logging
+from .base import DeviceDriver
+from lxml import etree
 from ncclient import manager
 from ncclient.manager import Manager
-from pathlib import Path  # Remove me once testing is done
-from ncclient.operations.retrieve import GetReply
 from ncclient.operations import RPCError
+from ncclient.operations.retrieve import GetReply
+from netauto.models import Interface, Vlan, Lag, Evpn
+from netauto.render import OcnosDeviceRenderer
+
 
 logger = logging.getLogger(__name__)
 
@@ -26,11 +20,6 @@ OCNOS_NS: dict[str, str] = {
     "nc": "urn:ietf:params:xml:ns:netconf:base:1.0",
     "vxlan": "http://www.ipinfusion.com/yang/ocnos/ipi-vxlan",
 }
-
-def pretty_xml(xml_str: str) -> str:
-    node = etree.fromstring(xml_str.encode("utf-8"))
-    return etree.tostring(node, pretty_print=True, encoding="unicode")
-
 
 class OcnosDriver(DeviceDriver):
     def __init__(self, host: str, user: str, password: str) -> None:
@@ -54,19 +43,6 @@ class OcnosDriver(DeviceDriver):
     def lag_prefix(self) -> str:
         return "po"
     
-#     def get_vlans(self) -> Dict[int, Vlan]:
-#         """
-#         return all vlans found on all interfaces
-#         XXX this doesn't include any access vlans since we're currently not collecting them
-#         """
-#         vlans = []
-#         interfaces = self.get_interfaces()
-#         for intf in interfaces:
-#             for vlan in intf.trunk_vlans:
-#                 vlans.append(vlan)
-#         return vlans
-
-
     def connect(self) -> Manager:
         if hasattr(self, "conn"):
             return self.conn
@@ -379,7 +355,7 @@ class OcnosDriver(DeviceDriver):
             logger.exception("Failed to get VNIs: %s", e)
             return []
 
-    def push_config(self, commands: List[str], dry_run: bool = False) -> str:
+    def push_config(self, commands: list[str], dry_run: bool = False) -> str:
         """
         Pushes configuration to OcNOS using ncclient.
 
