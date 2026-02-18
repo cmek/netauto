@@ -1,12 +1,13 @@
 import difflib
 import logging
+from collections import defaultdict
 from .base import DeviceDriver
 from lxml import etree
 from ncclient import manager
 from ncclient.manager import Manager
 from ncclient.operations import RPCError
 from ncclient.operations.retrieve import GetReply
-from netauto.models import Interface, Vlan, Lag, Evpn
+from netauto.models import Interface, Vlan, Lag, Evpn, RoutingInstance
 from netauto.render import OcnosDeviceRenderer
 
 
@@ -19,6 +20,8 @@ OCNOS_NS: dict[str, str] = {
     "ifagg": "http://www.ipinfusion.com/yang/ocnos/ipi-if-aggregate",
     "nc": "urn:ietf:params:xml:ns:netconf:base:1.0",
     "vxlan": "http://www.ipinfusion.com/yang/ocnos/ipi-vxlan",
+    "netinst": "http://www.ipinfusion.com/yang/ocnos/ipi-network-instance",
+    "bgpvrf": "http://www.ipinfusion.com/yang/ocnos/ipi-bgp-vrf",
 }
 
 class OcnosDriver(DeviceDriver):
@@ -305,6 +308,60 @@ class OcnosDriver(DeviceDriver):
             if isinstance(intf, Interface)
             for vlan in intf.trunk_vlans
         ]
+
+    def get_network_instances(self) -> list[RoutingInstance]:
+        if self.conn is None or not self.conn.connected: # consider making this a decorator?
+            raise ConnectionError("Not connected to device")
+
+        network_instance_subtree = """
+        <network-instances xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-network-instance"/>
+        """
+        try:
+            network_instance_filter = ("subtree", network_instance_subtree)
+            network_instance_reply: GetReply = self.conn.get(filter=network_instance_filter)
+    
+        except Exception as e:
+            logger.exception(f"Failed to get network-instances: {e}")
+            raise
+        
+        root: etree._Element | None = network_instance_reply.data_ele
+        if root is None:
+            raise ValueError("Failed to get network-instances")
+
+        network_instances: list[RoutingInstance] = []
+
+        network_instance: etree._Element
+        for network_instance in root.iterfind(
+            ".//netinst:network-instance", namespaces=OCNOS_NS
+        ):
+            instance_name = network_instance.findtext(
+                "netinst:instance-name", None, namespaces=OCNOS_NS
+            )
+            instance_type = network_instance.findtext(
+                "netinst:instance-type", None, namespaces=OCNOS_NS
+            )
+            rd = network_instance.findtext(
+                ".//bgpvrf:rd-string", None, namespaces=OCNOS_NS
+            )
+            rt_rd = network_instance.findtext(
+                ".//bgpvrf:route-targets/bgpvrf:route-target/bgpvrf:config/bgpvrf:rt-rd-string",
+                None,
+                namespaces=OCNOS_NS,
+            )
+
+            if not instance_name or not instance_type or not rd or not rt_rd:
+                continue
+
+            network_instances.append(
+                RoutingInstance(
+                    instance_name=instance_name.strip(),
+                    instance_type=instance_type.strip(),
+                    rd=rd.strip(),
+                    rt_rd=rt_rd.strip(),
+                )
+            )
+
+        return network_instances
 
     # This could cause additional calls of get_interfaces, we could do a cache of it locally?
     def get_system_macs(self) -> list[str]:
