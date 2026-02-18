@@ -1,10 +1,10 @@
-from typing import  Optional, Literal
+from typing import Optional, Literal
 from pydantic import BaseModel, Field
 
 
 class Vlan(BaseModel):
     vlan_id: int = Field(..., ge=1, le=4094)
-    name: str | None = None
+    name: Optional[str] = None
     s_tag: Optional[int] = Field(None, ge=1, le=4094)
 
 
@@ -19,7 +19,10 @@ class Interface(BaseModel):
     trunk_vlans: list[Vlan] = Field(default_factory=list)
     # For LAG
     lag_member_of: Optional[str] = None  # Name of the Port-Channel
-
+    # For Azure VPNS
+    arp_cache: Optional[bool] = None 
+    nd_cache: Optional[bool] = None 
+    vpn_id: Optional[int] = None
 
 class Lag(Interface):
     members: list[Interface] = Field(default_factory=list)
@@ -48,9 +51,17 @@ class Evpn(BaseModel):
     asn: int
     vni: int
 
-
 class EvpnService(Evpn):
     connections: list[Connection]
     vlan_id: int
     vni: int
     vrf_name: str
+
+
+# consider this name?
+class RoutingInstance(BaseModel):
+    instance_name: str
+    instance_type: str
+    rd: str
+    rt_rd: str
+    # direction: str

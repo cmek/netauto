@@ -1,7 +1,7 @@
 from .base import DeviceRenderer
 import xml.etree.ElementTree as ET
 import xml.dom.minidom
-from typing import List
+from typing import List, Optional
 from netauto.models import Interface, Lag, Vlan, Evpn
 
 
@@ -108,7 +108,12 @@ class OcnosDeviceRenderer(DeviceRenderer):
         pass
 
     def _append_vlan(
-        self, root: ET.Element, interface: Interface, vlan: Vlan
+        self,
+        root: ET.Element,
+        interface: Interface,
+        vlan: Vlan,
+        from_azure: bool,
+        evpn: Optional[Evpn] = None
     ) -> ET.Element:
         interfaces = self._append_interface(
             root,
@@ -134,8 +139,17 @@ class OcnosDeviceRenderer(DeviceRenderer):
         )
         rewrite = ET.SubElement(subenc, self._tag("ifext", "rewrite"))
         rewrite_config = ET.SubElement(rewrite, self._tag("ifext", "config"))
-        ET.SubElement(rewrite_config, self._tag("ifext", "vlan-action")).text = "pop"
-        ET.SubElement(rewrite_config, self._tag("ifext", "enable-pop")).text = "1tag"
+
+        # Could we move this into a j2 template or something cause
+        if vlan.s_tag:
+            ET.SubElement(rewrite_config, self._tag("ifext", "vlan-action")).text = "push"
+            ET.SubElement(
+                rewrite_config, self._tag("ifext", "push-outer-vlan-id")
+            ).text = str(vlan.s_tag)
+            ET.SubElement(rewrite_config, self._tag("ifext", "push-tpid")).text = "0x8100"
+        else:
+            ET.SubElement(rewrite_config, self._tag("ifext", "vlan-action")).text = "pop"
+            ET.SubElement(rewrite_config, self._tag("ifext", "enable-pop")).text = "1tag"
 
         singletag = ET.SubElement(subenc, self._tag("ifext", "single-tag-vlan-matches"))
         singletagmatch = ET.SubElement(
@@ -153,6 +167,14 @@ class OcnosDeviceRenderer(DeviceRenderer):
         ET.SubElement(
             singletagmatch_config, self._tag("ifext", "outer-vlan-id")
         ).text = str(vlan.vlan_id)
+
+        if from_azure:
+            access = ET.SubElement(extended, self._tag("ifext", "access-if-evpn"))
+            access_cfg = ET.SubElement(access, self._tag("ifext", "config"))
+            ET.SubElement(access_cfg, self._tag("ifext", "arp-cache")).text = "disable"
+            ET.SubElement(access_cfg, self._tag("ifext", "nd-cache")).text = "disable"
+            if evpn and evpn.vni is not None:
+                ET.SubElement(access_cfg, self._tag("ifext", "vpn-id")).text = str(evpn.vni)
 
         return root
 
@@ -248,11 +270,20 @@ class OcnosDeviceRenderer(DeviceRenderer):
 
         return root
 
-    def render_evpn(self, interface: Interface, evpn: Evpn) -> List[str]:
+    def render_evpn(self, interface: Interface, evpn: Evpn, from_azure: Optional[bool] = None) -> List[str]:
         """Render EVPN service configuration commands for the given platform."""
+        if not from_azure:
+            from_azure = False
+
         config = self._config_root()
         config = self._append_vrf(config, evpn)
-        config = self._append_vlan(config, interface, evpn.vlan)
+        config = self._append_vlan(
+            config,
+            interface,
+            evpn.vlan,
+            from_azure=from_azure,
+            evpn=evpn,
+        )
 
         return self._tostring(config)
 
