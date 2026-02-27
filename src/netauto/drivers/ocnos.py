@@ -24,14 +24,15 @@ OCNOS_NS: dict[str, str] = {
     "bgpvrf": "http://www.ipinfusion.com/yang/ocnos/ipi-bgp-vrf",
 }
 
+
 class OcnosDriver(DeviceDriver):
-    def __init__(self, host: str, user: str, password: str) -> None:
+    def __init__(self, host: str, user: str, password: str | None = None) -> None:
         self.connection_data = {
             "host": host,
             "port": 830,
             "username": user,
             "password": password,
-            "hostkey_verify": False, # Change to true for prod?
+            "hostkey_verify": False,  # Change to true for prod?
             "allow_agent": False,
             "timeout": 30,
         }
@@ -45,13 +46,15 @@ class OcnosDriver(DeviceDriver):
     @property
     def lag_prefix(self) -> str:
         return "po"
-    
+
     def connect(self) -> Manager:
         if hasattr(self, "conn"):
             return self.conn
         conn: Manager | None = manager.connect(**self.connection_data)
         if conn is None:
-            raise ConnectionError("NETCONF connection failed (manager.connect returned None)")
+            raise ConnectionError(
+                "NETCONF connection failed (manager.connect returned None)"
+            )
         return conn
 
     def disconnect(self) -> None:
@@ -66,7 +69,7 @@ class OcnosDriver(DeviceDriver):
             parser = etree.XMLParser(remove_blank_text=True)
             tree = etree.fromstring(xml_str.encode(), parser)
             return etree.tostring(tree, pretty_print=True).decode()
-            
+
         normalized_running = _normalize_xml(running_cfg)
         normalized_candidate = _normalize_xml(candidate_cfg)
         running_lines = normalized_running.splitlines(keepends=True)
@@ -101,26 +104,29 @@ class OcnosDriver(DeviceDriver):
         for intf in root.xpath("//*[local-name()='interface']"):
             intf: etree._Element
 
-            intf_name = intf.findtext(".//if:name", None, namespaces=OCNOS_NS) or intf.findtext(".//nc:name", None, namespaces=OCNOS_NS)
+            intf_name = intf.findtext(
+                ".//if:name", None, namespaces=OCNOS_NS
+            ) or intf.findtext(".//nc:name", None, namespaces=OCNOS_NS)
             if intf_name is None:
                 # Ask szymon how he wants to handle errors
                 logger.warning("failed to find interface name in data")
                 logger.debug(
                     "interface data:\n%s",
-                    etree.tostring(intf, pretty_print=True, encoding="unicode")
+                    etree.tostring(intf, pretty_print=True, encoding="unicode"),
                 )
                 continue
 
             intf_name = intf_name.strip()
 
-            intf_description = intf.findtext(".//if:description", None, namespaces=OCNOS_NS) or intf.findtext(".//nc:description", None, namespaces=OCNOS_NS)
+            intf_description = intf.findtext(
+                ".//if:description", None, namespaces=OCNOS_NS
+            ) or intf.findtext(".//nc:description", None, namespaces=OCNOS_NS)
             if intf_description:
                 intf_description = intf_description.strip()
 
-            logical_text = (
-                intf.findtext(".//if:logical", None, namespaces=OCNOS_NS)
-                or intf.findtext(".//nc:logical", None, namespaces=OCNOS_NS)
-            )
+            logical_text = intf.findtext(
+                ".//if:logical", None, namespaces=OCNOS_NS
+            ) or intf.findtext(".//nc:logical", None, namespaces=OCNOS_NS)
 
             intf_logical = (
                 logical_text.strip().lower() in {"true", "1", "yes"}
@@ -130,13 +136,19 @@ class OcnosDriver(DeviceDriver):
 
             # # Encapsulation / VLAN info. # Never used
             # intf_encapsulation_type = intf.findtext(".//ife:encapsulation-type", None, namespaces=OCNOS_NS)
-            intf_outer_vlan_id = intf.findtext(".//ife:outer-vlan-id", None, namespaces=OCNOS_NS)
-            intf_aggregate_id = intf.findtext(".//ifagg:config/ifagg:aggregate-id", None, namespaces=OCNOS_NS)
-            intf_hardware_type = intf.findtext(".//ife:hardware-type", None, namespaces=OCNOS_NS)
+            intf_outer_vlan_id = intf.findtext(
+                ".//ife:outer-vlan-id", None, namespaces=OCNOS_NS
+            )
+            intf_aggregate_id = intf.findtext(
+                ".//ifagg:config/ifagg:aggregate-id", None, namespaces=OCNOS_NS
+            )
+            intf_hardware_type = intf.findtext(
+                ".//ife:hardware-type", None, namespaces=OCNOS_NS
+            )
 
             if intf_aggregate_id:
                 lag_member_of = f"{self.lag_prefix}{intf_aggregate_id.strip()}"
-    
+
                 if lag_member_of not in lag_interfaces:
                     lag_interfaces[lag_member_of] = []
 
@@ -149,7 +161,9 @@ class OcnosDriver(DeviceDriver):
 
                 if not intf_outer_vlan_id:
                     logger.warning(
-                        logger.warning(f"Logical interface {intf_name} has no outer VLAN ID, skipping")
+                        logger.warning(
+                            f"Logical interface {intf_name} has no outer VLAN ID, skipping"
+                        )
                     )
                     continue
 
@@ -163,8 +177,8 @@ class OcnosDriver(DeviceDriver):
                 vlan_interfaces[physical_if_name].append(
                     Vlan(
                         vlan_id=int(intf_outer_vlan_id),
-                        name=intf_description, # Originally had a or "" is it needed?
-                        s_tag = None,
+                        name=intf_description,  # Originally had a or "" is it needed?
+                        s_tag=None,
                     )
                 )
                 continue
@@ -263,7 +277,9 @@ class OcnosDriver(DeviceDriver):
         return system_macs
 
     def get_interfaces(self) -> list[Interface | Lag]:
-        if self.conn is None or not self.conn.connected: # consider making this a decorator?
+        if (
+            self.conn is None or not self.conn.connected
+        ):  # consider making this a decorator?
             raise ConnectionError("Not connected to device")
 
         interfaces_subtree = """
@@ -285,11 +301,11 @@ class OcnosDriver(DeviceDriver):
             evpn_reply: GetReply = self.conn.get(filter=evpn_filter)
             interfaces = self._extract_interfaces(interfaces_reply)
             system_macs = self._extract_system_macs(evpn_reply) or {}
-                      
+
             for iface in interfaces:
                 if not isinstance(iface, Lag):
                     continue
-    
+
                 mac = system_macs.get(iface.name)
                 if mac:
                     iface.system_mac = mac
@@ -310,7 +326,9 @@ class OcnosDriver(DeviceDriver):
         ]
 
     def get_network_instances(self) -> list[RoutingInstance]:
-        if self.conn is None or not self.conn.connected: # consider making this a decorator?
+        if (
+            self.conn is None or not self.conn.connected
+        ):  # consider making this a decorator?
             raise ConnectionError("Not connected to device")
 
         network_instance_subtree = """
@@ -318,12 +336,14 @@ class OcnosDriver(DeviceDriver):
         """
         try:
             network_instance_filter = ("subtree", network_instance_subtree)
-            network_instance_reply: GetReply = self.conn.get(filter=network_instance_filter)
-    
+            network_instance_reply: GetReply = self.conn.get(
+                filter=network_instance_filter
+            )
+
         except Exception as e:
             logger.exception(f"Failed to get network-instances: {e}")
             raise
-        
+
         root: etree._Element | None = network_instance_reply.data_ele
         if root is None:
             raise ValueError("Failed to get network-instances")
@@ -375,13 +395,15 @@ class OcnosDriver(DeviceDriver):
         """
         Retrieves VNIs from OcNOS using Netconf.
         """
-        if self.conn is None or not self.conn.connected:  # consider making this a decorator?
+        if (
+            self.conn is None or not self.conn.connected
+        ):  # consider making this a decorator?
             raise ConnectionError("Not connected to device")
 
         vxlan_subtree = """
         <vxlan xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-vxlan"/>
         """
-    
+
         try:
             vxlan_filter: tuple[str, str] = ("subtree", vxlan_subtree)
             vxlan_reply: GetReply = self.conn.get(filter=vxlan_filter)
@@ -394,8 +416,10 @@ class OcnosDriver(DeviceDriver):
 
             for tenant in root.xpath(".//vxlan:vxlan-tenant", namespaces=OCNOS_NS):
                 tenant: etree._Element
-                vni_text: str | None = tenant.findtext(".//*[local-name()='vxlan-identifier']", None, namespaces=OCNOS_NS)
-    
+                vni_text: str | None = tenant.findtext(
+                    ".//*[local-name()='vxlan-identifier']", None, namespaces=OCNOS_NS
+                )
+
                 if not vni_text:
                     continue
 
@@ -408,7 +432,7 @@ class OcnosDriver(DeviceDriver):
 
             return sorted(vnis)
 
-        except Exception as e:  # i dont like this, revise it when ive got more data 
+        except Exception as e:  # i dont like this, revise it when ive got more data
             logger.exception("Failed to get VNIs: %s", e)
             return []
 
@@ -441,7 +465,9 @@ class OcnosDriver(DeviceDriver):
                     raise RPCError(edit_reply.xml)
 
             candidate_reply = self.conn.get_config(source="candidate")
-            candidate_xml = getattr(candidate_reply, "data_xml", None) or candidate_reply.xml
+            candidate_xml = (
+                getattr(candidate_reply, "data_xml", None) or candidate_reply.xml
+            )
 
             diff = self._compute_diff(running_xml, candidate_xml)
 
@@ -476,7 +502,6 @@ class OcnosDriver(DeviceDriver):
                 except Exception:
                     pass
 
-
     def push_interface(
         self, interface: Interface, delete: bool = False, dry_run: bool = False
     ) -> str:
@@ -489,7 +514,6 @@ class OcnosDriver(DeviceDriver):
             else self.renderer.render_interface(interface)
         )
         return self.push_config([config_xml], dry_run=dry_run)
-
 
     def push_lag(self, lag: Lag, delete: bool = False, dry_run: bool = False) -> str:
         """
