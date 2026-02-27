@@ -190,6 +190,9 @@ class OcnsConfigFileParser:
             r"^\s*channel-group\s+(\d+)(?:\s+mode\s+(active|passive|on))?\b", re.M
         )
         min_links: Pattern[str] = re.compile(r"^\s*lacp\s+min-links\s+(\d+)\s*$", re.M)
+        lag_system_mac: Pattern[str] = re.compile(
+            r"^\s*evpn\s+multi-homed\s+system-mac\s+([0-9A-Fa-f.]+)\s*$", re.M
+        )
 
         lags: list[Lag] = []
         members_by_lag: dict[str, list[Interface]] = {}
@@ -255,6 +258,11 @@ class OcnsConfigFileParser:
             min_links_match = min_links.search(intf)
             lag_min_links = int(min_links_match.group(1)) if min_links_match else 1
 
+            lag_system_mac_match = lag_system_mac.search(intf)
+            lag_system_mac_value = (
+                lag_system_mac_match.group(1) if lag_system_mac_match else None
+            )
+
             lags.append(
                 Lag(
                     name=lag_name,
@@ -267,6 +275,7 @@ class OcnsConfigFileParser:
                     members=members_by_lag.get(lag_name, []),
                     lacp_mode=lacp_by_lag.get(lag_name, "active"), # pyright: ignore[reportArgumentType]  # ty:ignore[invalid-argument-type]
                     min_links=lag_min_links,
+                    system_mac=lag_system_mac_value,
                 )
             )
 
@@ -369,6 +378,7 @@ class OcnsConfigXMLParser:
         "oc": "http://www.ipinfusion.com/yang/ocnos/ipi-interface",
         "agg": "http://www.ipinfusion.com/yang/ocnos/ipi-if-aggregate",
         "ext": "http://www.ipinfusion.com/yang/ocnos/ipi-if-extended",
+        "evpn": "http://www.ipinfusion.com/yang/ocnos/ipi-ethernet-vpn",
         "ni": "http://www.ipinfusion.com/yang/ocnos/ipi-network-instance",
         "vrf": "http://www.ipinfusion.com/yang/ocnos/ipi-vrf",
         "bgp": "http://www.ipinfusion.com/yang/ocnos/ipi-bgp-vrf",
@@ -542,10 +552,26 @@ class OcnsConfigXMLParser:
         lags: list[Lag] = []
         members_by_lag: dict[str, list[Interface]] = {}
         lacp_by_lag: dict[str, str] = {}
+        system_mac_by_lag: dict[str, str] = {}
 
         interfaces = list(
             self.config.iterfind(".//oc:interfaces/oc:interface", namespaces=self.ns)
         )
+
+        for evpn_intf in self.config.iterfind(
+            ".//evpn:interfaces/evpn:interface", namespaces=self.ns
+        ):
+            evpn_name = evpn_intf.findtext("evpn:name", namespaces=self.ns)
+            if not evpn_name:
+                evpn_name = evpn_intf.findtext("evpn:config/evpn:name", namespaces=self.ns)
+            if not evpn_name:
+                continue
+
+            evpn_system_mac = evpn_intf.findtext(
+                "evpn:config/evpn:system-mac", namespaces=self.ns
+            )
+            if evpn_system_mac:
+                system_mac_by_lag[evpn_name] = evpn_system_mac
 
         # find the members first
         for intf in interfaces:
@@ -591,6 +617,11 @@ class OcnsConfigXMLParser:
                 continue
 
             lag_description = intf.findtext("oc:config/oc:description", namespaces=self.ns)
+            lag_system_mac = system_mac_by_lag.get(lag_name)
+            if not lag_system_mac:
+                lag_system_mac = intf.findtext(
+                    "oc:config/oc:system-mac", namespaces=self.ns
+                )
             mtu_text = intf.findtext("oc:config/oc:mtu", namespaces=self.ns)
             lag_mtu = int(mtu_text) if mtu_text and mtu_text.isdigit() else None
 
@@ -619,6 +650,7 @@ class OcnsConfigXMLParser:
                     trunk_vlans=[],
                     members=members_by_lag.get(lag_name, []), # Theres lags without members in the example conf
                     lacp_mode=lacp_by_lag[lag_name],  # ty:ignore[invalid-argument-type] # pyright: ignore[reportArgumentType]
+                    system_mac=lag_system_mac,
                 )
             )
 
