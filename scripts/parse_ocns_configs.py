@@ -1,12 +1,9 @@
-from lxml.html.builder import P
-from argparse import Namespace
-import argparse
-import json
 import re
+from lxml import etree
+from lxml.etree import Element
+from netauto.models import Evpn, Interface, Lag, RoutingInstance, Vlan
 from pathlib import Path
 from typing import Any, Pattern
-from netauto.models import Evpn, Interface, Lag, RoutingInstance, Vlan
-
 
 INTERFACE_RE = re.compile(r"^interface\s+(?P<name>\S+)$")
 MAC_VRF_RE = re.compile(r"^mac\s+vrf\s+(?P<name>\S+)$")
@@ -249,7 +246,7 @@ class OcnsConfigFileParser:
             trunk_allowed_match = trunk_allowed.search(intf)
             if trunk_allowed_match:
                 for vlan_id in self._parse_vlan_list(trunk_allowed_match.group(1)):
-                    trunk_vlans.append(Vlan(vlan_id=vlan_id))
+                    trunk_vlans.append(Vlan(vlan_id=vlan_id, s_tag=None))
 
             mode = "routed"
             if has_switchport:
@@ -268,7 +265,7 @@ class OcnsConfigFileParser:
                     access_vlan=lag_access_vlan,
                     trunk_vlans=trunk_vlans,
                     members=members_by_lag.get(lag_name, []),
-                    lacp_mode=lacp_by_lag.get(lag_name, "active"),
+                    lacp_mode=lacp_by_lag.get(lag_name, "active"), # pyright: ignore[reportArgumentType]  # ty:ignore[invalid-argument-type]
                     min_links=lag_min_links,
                 )
             )
@@ -331,7 +328,7 @@ class OcnsConfigFileParser:
 
             evpns.append(
                 Evpn(
-                    vlan=Vlan(vlan_id=vlan_id, name=service_name),
+                    vlan=Vlan(vlan_id=vlan_id, name=service_name, s_tag=None),
                     description=service_name,
                     asn=asn,
                     vni=vni,
@@ -367,52 +364,349 @@ class OcnsConfigFileParser:
             "evpns": evpns,
         }
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="parser for OcNOS config text files")
-    parser.add_argument(
-        "--input",
-        type=Path,
-        default=Path("./configs/ocns/"),
-        help="Path to a config file or directory of *.config.txt files",
-    )
-    parser.add_argument(
-        "--output",
-        type=Path,
-        default=Path("models/ocns/"),
-        help="Optional path to write JSON output",
-    )
-    args: Namespace = parser.parse_args()
+class OcnsConfigXMLParser:
+    ns: dict[str, str] = {
+        "oc": "http://www.ipinfusion.com/yang/ocnos/ipi-interface",
+        "agg": "http://www.ipinfusion.com/yang/ocnos/ipi-if-aggregate",
+        "ext": "http://www.ipinfusion.com/yang/ocnos/ipi-if-extended",
+        "ni": "http://www.ipinfusion.com/yang/ocnos/ipi-network-instance",
+        "vrf": "http://www.ipinfusion.com/yang/ocnos/ipi-vrf",
+        "bgp": "http://www.ipinfusion.com/yang/ocnos/ipi-bgp-vrf",
+        "vx": "http://www.ipinfusion.com/yang/ocnos/ipi-vxlan",
+    }
     
-    input_path: Path = args.input
-    output_path: Path = args.output
-    print(output_path.absolute())
-    files = input_path.glob("*.config.txt")
-    if not files:
-        raise SystemExit(f"No config files found at: {args.input}")
+    def __init__(self, config: Element | Path | str):
+        self.config: Element = self._parse_input_data(config)
 
-    # parsed_payload = []
-    for config_file in files:
-        print(f"Results for: {config_file.name}")
-        parser = OcnsConfigFileParser(config_file)
-        config_data = parser.parse_ocnos_config()
-        print(f"  parsed interfaces: {len(config_data['interfaces'])}")
-        print(f"  parsed lags: {len(config_data['lags'])}")
-        print(f"  parsed vlans: {len(config_data['vlans'])}")
-        print(f"  parsed network_instances: {len(config_data['network_instances'])}")
-        print(f"  parsed evpns: {len(config_data['evpns'])}")
+    def _parse_input_data(self, input_config: Element | Path | str) -> Element:
+        match input_config:
+            case Element():
+                return input_config
+            case Path():
+                if not input_config.exists():
+                    raise ValueError(f"Config path does not exist: {input_config}")
+                config_text = input_config.read_text(
+                    encoding="utf-8", errors="ignore"
+                )
+            case str():
+                config_text = input_config
+            case _:
+                raise ValueError("Invalid content type submitted for config")
 
-        folder_name = config_file.name.removesuffix(".config.txt")
-        output_dir = output_path / folder_name
-        output_dir.mkdir(parents=True, exist_ok=True)
+        if not config_text or not config_text.strip():
+            raise ValueError("Empty config data given")
 
-        for k, v in config_data.items():
-            output_file = output_dir / f"{k}.json"
-            with output_file.open("w") as f:
-                data = [ entry.model_dump() for entry in v]
-                json.dump(data, f, indent=4)
+        try:
+            return etree.fromstring(config_text.encode("utf-8"))
+        except etree.XMLSyntaxError as exc:
+            raise ValueError(f"Invalid XML config data: {exc}") from exc
 
-    return 0
+    def parse_interfaces(self) -> list[Interface]:
+        interfaces: list[Interface] = []
 
+        for intf in self.config.iterfind(".//oc:interfaces/oc:interface", namespaces=self.ns):
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+            # Name is the only actually mandatory attrib
+            intf_name = intf.findtext("oc:name", namespaces=self.ns)
+            if not intf_name: 
+                intf_name = intf.findtext("oc:config/oc:name", namespaces=self.ns)
+            if not intf_name:
+                raise ValueError("Unable to determine name from interface data")
+
+            mtu_text = intf.findtext("oc:config/oc:mtu", namespaces=self.ns)
+            intf_mtu = int(mtu_text) if mtu_text and mtu_text.isdigit() else None
+            intf_description = intf.findtext("oc:config/oc:description", namespaces=self.ns)
+
+            # It seems theres only a flag rather than something striclt enabled
+            is_enabled = intf.find("oc:config/oc:shutdown", namespaces=self.ns) is None
+            has_switchport = (
+                intf.find("oc:config/oc:enable-switchport", namespaces=self.ns) is not None
+            )
+
+            mode = "access" if has_switchport else "routed"
+
+            vlan_text = intf.findtext(
+                ".//ext:subinterface-encapsulation//ext:config/ext:outer-vlan-id",
+                namespaces=self.ns,
+            )
+            intf_access_vlan = int(vlan_text) if vlan_text and vlan_text.isdigit() else None
+
+            aggregate_id_text = intf.findtext(
+                "agg:member-aggregation/agg:config/agg:aggregate-id",
+                namespaces=self.ns,
+            )
+            lag_member_of = (
+                f"po{aggregate_id_text}"
+                if aggregate_id_text and aggregate_id_text.isdigit()
+                else None
+            )
+
+            interfaces.append(
+                Interface(
+                    name=intf_name,
+                    description=intf_description,
+                    enabled=is_enabled,
+                    mtu=intf_mtu,
+                    mode=mode,
+                    access_vlan=intf_access_vlan,
+                    lag_member_of=lag_member_of,
+                )
+            )
+
+        return interfaces
+
+    def parse_vlans(self) -> list[Vlan]:
+        vlans: list[Vlan] = []
+        
+        # # pseudocode till i can find a example with some vlan
+        # for vlan in self.config.iterfind(".//oc:vlans", namespaces=self.ns):
+            # vlan_id_text = vlan.findtext(".//{*}id")
+            # if vlan_id_text is None:
+            #     vlan_id_text = vlan.findtext(".//{*}vlan-id")
+            # if not vlan_id_text:
+            #     raise ValueError("Unable to find vlan id")
+
+            # vlan_id = int(vlan_id_text)
+
+            # vlan_name = vlan.findtext(".//{*}name")
+            # if vlan_name is None:
+            #     raise ValueError("Unable to find vlan name")
+            # if vlan_name:
+            #     vlan_name = vlan_name.strip()
+
+            # s_tag_text = vlan.findtext(".//{*}s-tag")
+            # if s_tag_text is None:
+            #     s_tag_text = vlan.findtext(".//{*}service-vlan")
+            # vlan_s_tag = int(s_tag_text) if s_tag_text else None
+
+            # vlans.append(
+            #     Vlan(
+            #         vlan_id=vlan_id,
+            #         name=vlan_name,
+            #         s_tag=vlan_s_tag,
+            #     )
+            # )
+
+        return vlans
+
+    def parse_network_instances(self) -> list[RoutingInstance]:
+        network_instances: list[RoutingInstance] = []
+
+        for instance in self.config.iterfind(
+            ".//ni:network-instances/ni:network-instance", namespaces=self.ns
+        ):
+            instance_name = instance.findtext("ni:instance-name", namespaces=self.ns)
+            if not instance_name:
+                instance_name = instance.findtext("ni:config/ni:instance-name", namespaces=self.ns)
+            if not instance_name:
+                continue
+
+            instance_type = instance.findtext("ni:instance-type", namespaces=self.ns)
+            if not instance_type:
+                instance_type = instance.findtext("ni:config/ni:instance-type", namespaces=self.ns)
+            if instance_type != "mac-vrf":
+                continue
+
+            rd_value = instance.findtext(
+                "vrf:vrf/bgp:bgp-vrf/bgp:config/bgp:rd-string",
+                namespaces=self.ns,
+            )
+            if not rd_value:
+                rd_value = instance.findtext(".//bgp:rd-string", namespaces=self.ns)
+
+            rt_value = instance.findtext(
+                "vrf:vrf/bgp:bgp-vrf/bgp:route-target/bgp:config/bgp:rt-rd-string",
+                namespaces=self.ns,
+            )
+            if not rt_value:
+                rt_value = instance.findtext(
+                    ".//bgp:route-target/bgp:rt-rd-string",
+                    namespaces=self.ns,
+                )
+
+            if not rd_value or not rt_value:
+                continue
+
+            network_instances.append(
+                RoutingInstance(
+                    instance_name=instance_name,
+                    instance_type=instance_type,
+                    rd=rd_value,
+                    rt_rd=rt_value,
+                )
+            )
+
+        return network_instances
+
+    def parse_lags(self) -> list[Lag]:
+        lags: list[Lag] = []
+        members_by_lag: dict[str, list[Interface]] = {}
+        lacp_by_lag: dict[str, str] = {}
+
+        interfaces = list(
+            self.config.iterfind(".//oc:interfaces/oc:interface", namespaces=self.ns)
+        )
+
+        # find the members first
+        for intf in interfaces:
+            intf_name = intf.findtext("oc:name", namespaces=self.ns)
+            if not intf_name:
+                intf_name = intf.findtext("oc:config/oc:name", namespaces=self.ns)
+            if not intf_name or "." in intf_name:
+                continue
+
+            aggregate_id = intf.findtext(
+                "agg:member-aggregation/agg:config/agg:aggregate-id",
+                namespaces=self.ns,
+            )
+            if not aggregate_id:
+                continue
+            if not aggregate_id.isdigit():
+                raise ValueError("LAG has non number id")
+
+            #  po anmed by aggregate-id.
+            lag_name = f"po{aggregate_id}"
+            members_by_lag.setdefault(lag_name, []).append(Interface(name=intf_name))
+
+            lacp_mode = intf.findtext(
+                "agg:member-aggregation/agg:config/agg:lacp-mode",
+                namespaces=self.ns,
+            )
+            if not lacp_mode:
+                raise ValueError("No LACP mode configured")
+
+            if lacp_mode in {"active", "passive", "static"}:
+                lacp_by_lag[lag_name] = lacp_mode
+            else:
+                raise ValueError(f"Unsupported LACP mode: {lacp_mode}")
+
+        # now make the lags
+        for intf in interfaces:
+            lag_name = intf.findtext("oc:name", namespaces=self.ns)
+            if not lag_name:
+                lag_name = intf.findtext("oc:config/oc:name", namespaces=self.ns)
+
+            # skip anything not needed
+            if lag_name not in lacp_by_lag:
+                continue
+
+            lag_description = intf.findtext("oc:config/oc:description", namespaces=self.ns)
+            mtu_text = intf.findtext("oc:config/oc:mtu", namespaces=self.ns)
+            lag_mtu = int(mtu_text) if mtu_text and mtu_text.isdigit() else None
+
+            is_enabled = intf.find("oc:config/oc:shutdown", namespaces=self.ns) is None
+            has_switchport = (
+                intf.find("oc:config/oc:enable-switchport", namespaces=self.ns) is not None
+            )
+            mode = "access" if has_switchport else "routed"
+
+            vlan_text = intf.findtext(
+                ".//ext:subinterface-encapsulation//ext:config/ext:outer-vlan-id",
+                namespaces=self.ns,
+            )
+            lag_access_vlan  = int(vlan_text) if vlan_text and vlan_text.isdigit() else None
+            
+            # i dont see min links in conf? did that come from us?
+
+            lags.append(
+                Lag(
+                    name=lag_name,
+                    description=lag_description,
+                    enabled=is_enabled,
+                    mtu=lag_mtu,
+                    mode=mode,
+                    access_vlan=lag_access_vlan,
+                    trunk_vlans=[],
+                    members=members_by_lag.get(lag_name, []), # Theres lags without members in the example conf
+                    lacp_mode=lacp_by_lag[lag_name],  # ty:ignore[invalid-argument-type] # pyright: ignore[reportArgumentType]
+                )
+            )
+
+        return lags
+
+    def parse_evpns(self) -> list[Evpn]:
+        # repeated call, maby cache?
+        network_instances = self.parse_network_instances()
+        rd_by_instance: dict[str, str] = {
+            instance.instance_name: instance.rd for instance in network_instances
+        }
+
+        vni_by_instance: dict[str, int] = {}
+        for tenant in self.config.iterfind(
+            ".//vx:vxlan-tenants/vx:vxlan-tenant", namespaces=self.ns
+        ):
+            vni_text = tenant.findtext("vx:vxlan-identifier", namespaces=self.ns)
+            if not vni_text:
+                vni_text = tenant.findtext("vx:config/vx:vxlan-identifier", namespaces=self.ns)
+            instance_name = tenant.findtext("vx:config/vx:vrf-name", namespaces=self.ns)
+
+            if not instance_name or not vni_text or not vni_text.isdigit():
+                continue
+
+            vni_by_instance[instance_name] = int(vni_text)
+
+        evpns: list[Evpn] = []
+        seen: set[tuple[str, int, int]] = set()
+
+        for intf in self.config.iterfind(".//oc:interfaces/oc:interface", namespaces=self.ns):
+            intf_name = intf.findtext("oc:name", namespaces=self.ns)
+            if not intf_name:
+                intf_name = intf.findtext("oc:config/oc:name", namespaces=self.ns)
+            if not intf_name or "." not in intf_name:
+                continue
+
+            service_name = intf.findtext("oc:config/oc:description", namespaces=self.ns)
+            if not service_name:
+                continue
+            service_name = service_name.strip()
+
+            vlan_text = intf.findtext(
+                ".//ext:subinterface-encapsulation//ext:config/ext:outer-vlan-id",
+                namespaces=self.ns,
+            )
+            if not vlan_text or not vlan_text.isdigit():
+                continue
+            vlan_id = int(vlan_text)
+
+            vni = vni_by_instance.get(service_name)
+            rd_value = rd_by_instance.get(service_name)
+            if vni is None or rd_value is None:
+                continue
+
+            asn_text = rd_value.split(":", 1)[0]
+            try:
+                asn = int(asn_text)
+            except ValueError:
+                continue
+
+            key = (service_name, vlan_id, vni)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            # nothing looks like a s_tag which i guess is fine?
+            # s_tag=None 
+            evpns.append(
+                Evpn(
+                    vlan=Vlan(vlan_id=vlan_id, name=service_name, s_tag=None),
+                    description=service_name,
+                    asn=asn,
+                    vni=vni,
+                )
+            )
+
+        return evpns
+
+    def parse_ocnos_config(self) -> dict[str, Any]:
+        interfaces = self.parse_interfaces()
+        lags = self.parse_lags()
+        vlans = self.parse_vlans()
+        network_instances = self.parse_network_instances()
+        evpns = self.parse_evpns()
+        return {
+            "interfaces": interfaces,
+            "lags": lags,
+            "vlans": vlans,
+            "network_instances": network_instances,
+            "evpns": evpns,
+        }
