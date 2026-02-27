@@ -169,6 +169,9 @@ class AristaConfigFileParser:
             r"^\s+switchport trunk allowed vlan\s+(.+)$", re.M
         )
         min_links: Pattern[str] = re.compile(r"^\s+port-channel min-links\s+(\d+)\s*$", re.M)
+        lag_system_mac: Pattern[str] = re.compile(
+            r"^\s+lacp system-id\s+([0-9A-Fa-f.]+)\s*$", re.M
+        )
 
         member_header: Pattern[str] = re.compile(r"^interface\s+(\S+)$", re.M)
         member_group: Pattern[str] = re.compile(
@@ -235,6 +238,9 @@ class AristaConfigFileParser:
             min_links_match = min_links.search(intf)
             min_links_value = int(min_links_match.group(1)) if min_links_match else 1
 
+            system_mac_match = lag_system_mac.search(intf)
+            system_mac_value = system_mac_match.group(1) if system_mac_match else None
+
             lags.append(
                 Lag(
                     name=lag_name,
@@ -247,6 +253,7 @@ class AristaConfigFileParser:
                     members=members_by_lag.get(lag_name, []),
                     lacp_mode=lacp_mode_by_lag.get(lag_name, "active"),  # ty:ignore[invalid-argument-type] # pyright: ignore[reportArgumentType]
                     min_links=min_links_value,
+                    system_mac=system_mac_value,
                 )
             )
 
