@@ -47,6 +47,16 @@ class AristaDriver(DeviceDriver):
         # eAPI is stateless, nothing to close
         pass
 
+    def get_config(self, config_type: str = "running") -> str:
+        if config_type == "running":
+            return self.node.running_config
+        elif config_type == "startup":
+            return self.node.startup_config
+        else:
+            raise Exception(
+                f"Unknown config type {config_type}, allowed values are running or startup"
+            )
+
     def get_interfaces(self) -> List[Interface | Lag]:
         """
         Retrieves interfaces from Arista EOS using 'show interfaces | json'.
@@ -130,7 +140,9 @@ class AristaDriver(DeviceDriver):
 
         return vnis
 
-    def push_evpn(self, interface, evpn: Evpn, delete: bool = False, dry_run: bool = False):
+    def push_evpn(
+        self, interface, evpn: Evpn, delete: bool = False, dry_run: bool = False
+    ):
         commands = (
             self.renderer.render_evpn_delete(interface, evpn)
             if delete
