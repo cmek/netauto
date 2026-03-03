@@ -10,10 +10,12 @@ class OcnosDeviceRenderer(DeviceRenderer):
         "nc": "urn:ietf:params:xml:ns:netconf:base:1.0",
         "if": "http://www.ipinfusion.com/yang/ocnos/ipi-interface",
         "ifext": "http://www.ipinfusion.com/yang/ocnos/ipi-if-extended",
+        "ethvpn": "http://www.ipinfusion.com/yang/ocnos/ipi-ethernet-vpn",
         "vrf": "http://www.ipinfusion.com/yang/ocnos/ipi-vrf",
         "bgpvrf": "http://www.ipinfusion.com/yang/ocnos/ipi-bgp-vrf",
         "netinst": "http://www.ipinfusion.com/yang/ocnos/ipi-network-instance",
         "ifagg": "http://www.ipinfusion.com/yang/ocnos/ipi-if-aggregate",
+        "evpnmpls": "http://www.ipinfusion.com/yang/ocnos/ipi-evpn-mpls",
     }
 
     def __init__(self):
@@ -112,7 +114,7 @@ class OcnosDeviceRenderer(DeviceRenderer):
         root: ET.Element,
         interface: Interface,
         vlan: Vlan,
-        from_azure: bool,
+        from_azure: Optional[bool] = False,
         evpn: Optional[Evpn] = None
     ) -> ET.Element:
         interfaces = self._append_interface(
@@ -168,21 +170,198 @@ class OcnosDeviceRenderer(DeviceRenderer):
             singletagmatch_config, self._tag("ifext", "outer-vlan-id")
         ).text = str(vlan.vlan_id)
 
-        if from_azure:
-            access = ET.SubElement(extended, self._tag("ifext", "access-if-evpn"))
-            access_cfg = ET.SubElement(access, self._tag("ifext", "config"))
-            ET.SubElement(access_cfg, self._tag("ifext", "arp-cache")).text = "disable"
-            ET.SubElement(access_cfg, self._tag("ifext", "nd-cache")).text = "disable"
-            if evpn and evpn.vni is not None:
-                ET.SubElement(access_cfg, self._tag("ifext", "vpn-id")).text = str(evpn.vni)
+        return root
+
+    def render_vlan(self, interface: Interface, vlan: Vlan, from_azure: Optional[bool] = False) -> List[str]:
+        """Render LAG configuration commands for the given platform."""
+        config = self._config_root()
+        cfg = self._append_vlan(config, interface, vlan, from_azure)
+        return self._tostring(cfg)
+
+    # i had to make a bunch of helpers to get it going, they might be useful
+    def _append_evpn_mpls_tenant(self, root: ET.Element, evpn: Evpn) -> ET.Element:
+        evpn_mpls = ET.SubElement(root, self._tag("evpnmpls", "evpn-mpls"))
+        global_cfg = ET.SubElement(evpn_mpls, self._tag("evpnmpls", "global"))
+        global_cfg_config = ET.SubElement(global_cfg, self._tag("evpnmpls", "config"))
+
+        if len(evpn.description) > 10:
+            raise ValueError(
+                f"OcNOS EVPN EVI name must be 10 chars or fewer: '{evpn.description}'"
+            )
+
+        ET.SubElement(global_cfg_config, self._tag("evpnmpls", "enable-evpn-mpls"))
+
+        mpls_tenants = ET.SubElement(evpn_mpls, self._tag("evpnmpls", "mpls-tenants"))
+        mpls_tenant = ET.SubElement(mpls_tenants, self._tag("evpnmpls", "mpls-tenant"))
+
+        ET.SubElement(
+            mpls_tenant, self._tag("evpnmpls", "tenant-identifier")
+        ).text = str(evpn.vni)
+
+        tenant_config = ET.SubElement(mpls_tenant, self._tag("evpnmpls", "config"))
+
+        ET.SubElement(
+            tenant_config, self._tag("evpnmpls", "tenant-identifier")
+        ).text = str(evpn.vni)
+        ET.SubElement(
+            tenant_config, self._tag("evpnmpls", "vrf-name")
+        ).text = evpn.description
+        ET.SubElement(
+            tenant_config, self._tag("evpnmpls", "tenant-description")
+        ).text = evpn.description
 
         return root
 
-    def render_vlan(self, interface: Interface, vlan: Vlan) -> List[str]:
-        """Render LAG configuration commands for the given platform."""
+    # this should only be needed if it didnt exist,
+    # naturally in my testing it didnt exist
+    def render_evpn_mpls_tenant(self, evpn: Evpn) -> str:
         config = self._config_root()
-        cfg = self._append_vlan(config, interface, vlan)
-        return self._tostring(cfg)
+        config = self._append_evpn_mpls_tenant(config, evpn)
+        return self._tostring(config)
+
+    def _append_evpn_mpls_tenant_delete(self, root: ET.Element, evpn: Evpn) -> ET.Element:
+        evpn_mpls = ET.SubElement(root, self._tag("evpnmpls", "evpn-mpls"))
+        mpls_tenants = ET.SubElement(evpn_mpls, self._tag("evpnmpls", "mpls-tenants"))
+        mpls_tenant = ET.SubElement(mpls_tenants, self._tag("evpnmpls", "mpls-tenant"))
+        mpls_tenant.set(self._tag("nc", "operation"), "delete")
+
+        ET.SubElement(
+            mpls_tenant, self._tag("evpnmpls", "tenant-identifier")
+        ).text = str(evpn.vni)
+
+        return root
+
+    def render_evpn_mpls_tenant_delete(self, evpn: Evpn) -> str:
+        config = self._config_root()
+        config = self._append_evpn_mpls_tenant_delete(config, evpn)
+        return self._tostring(config)
+
+    def _append_ethernet_vpn_vrf_service(
+        self, root: ET.Element, evpn: Evpn, service_type: str = "vlan-aware-bundle"
+    ) -> ET.Element:
+        evpn_root = ET.SubElement(root, self._tag("ethvpn", "evpn"))
+        vrfs = ET.SubElement(evpn_root, self._tag("ethvpn", "vrfs"))
+        vrf = ET.SubElement(vrfs, self._tag("ethvpn", "vrf"))
+
+        ET.SubElement(vrf, self._tag("ethvpn", "vrf-name")).text = evpn.description
+
+        vrf_config = ET.SubElement(vrf, self._tag("ethvpn", "config"))
+
+        ET.SubElement(vrf_config, self._tag("ethvpn", "vrf-name")).text = evpn.description
+        ET.SubElement(vrf_config, self._tag("ethvpn", "service-type")).text = service_type
+
+        return root
+
+    # this should only be needed if it didnt exist,
+    # naturally in my testing it didnt exist
+    def render_ethernet_vpn_vrf_service(
+        self, evpn: Evpn, service_type: str = "vlan-aware-bundle"
+    ) -> str:
+        config = self._config_root()
+        config = self._append_ethernet_vpn_vrf_service(config, evpn, service_type)
+        return self._tostring(config)
+
+    def _append_ethernet_vpn_vrf_service_delete(
+        self, root: ET.Element, vrf_name: str
+    ) -> ET.Element:
+        evpn_root = ET.SubElement(root, self._tag("ethvpn", "evpn"))
+        vrfs = ET.SubElement(evpn_root, self._tag("ethvpn", "vrfs"))
+        vrf = ET.SubElement(vrfs, self._tag("ethvpn", "vrf"))
+        vrf.set(self._tag("nc", "operation"), "delete")
+        ET.SubElement(vrf, self._tag("ethvpn", "vrf-name")).text = vrf_name
+        return root
+
+    def render_ethernet_vpn_vrf_service_delete(self, vrf_name: str) -> str:
+        config = self._config_root()
+        config = self._append_ethernet_vpn_vrf_service_delete(config, vrf_name)
+        return self._tostring(config)
+
+    def _append_ethernet_vpn_access(
+        self,
+        root: ET.Element,
+        interface_name: str,
+        vni: int,
+        *,
+        include_arp_cache_disable: bool = False,
+        include_nd_cache_disable: bool = False,
+    ) -> ET.Element:
+        evpn_root = ET.SubElement(root, self._tag("ethvpn", "evpn"))
+        interfaces = ET.SubElement(evpn_root, self._tag("ethvpn", "interfaces"))
+        interface = ET.SubElement(interfaces, self._tag("ethvpn", "interface"))
+        ET.SubElement(interface, self._tag("ethvpn", "name")).text = interface_name
+
+        interface_config = ET.SubElement(interface, self._tag("ethvpn", "config"))
+        ET.SubElement(interface_config, self._tag("ethvpn", "name")).text = interface_name
+
+        access_interfaces = ET.SubElement(
+            interface, self._tag("ethvpn", "access-interfaces")
+        )
+        access_interface = ET.SubElement(
+            access_interfaces, self._tag("ethvpn", "access-interface")
+        )
+        ET.SubElement(access_interface, self._tag("ethvpn", "access-if")).text = (
+            "access-if-evpn"
+        )
+
+        access_config = ET.SubElement(access_interface, self._tag("ethvpn", "config"))
+        ET.SubElement(access_config, self._tag("ethvpn", "access-if")).text = (
+            "access-if-evpn"
+        )
+        ET.SubElement(access_config, self._tag("ethvpn", "evpn-identifier")).text = str(
+            vni
+        )
+
+        if include_arp_cache_disable:
+            ET.SubElement(access_config, self._tag("ethvpn", "arp-cache-disable"))
+        if include_nd_cache_disable:
+            ET.SubElement(access_config, self._tag("ethvpn", "nd-cache-disable"))
+
+        return root
+    
+    # this should only be needed if it didnt exist,
+    # naturally in my testing it didnt exist
+    def render_ethernet_vpn_access(
+        self,
+        interface_name: str,
+        vni: int,
+        *,
+        include_arp_cache_disable: bool = False,
+        include_nd_cache_disable: bool = False,
+    ) -> str:
+        config = self._config_root()
+        config = self._append_ethernet_vpn_access(
+            config,
+            interface_name,
+            vni,
+            include_arp_cache_disable=include_arp_cache_disable,
+            include_nd_cache_disable=include_nd_cache_disable,
+        )
+        return self._tostring(config)
+
+    def _append_ethernet_vpn_access_delete(
+        self, root: ET.Element, interface_name: str
+    ) -> ET.Element:
+        evpn_root = ET.SubElement(root, self._tag("ethvpn", "evpn"))
+        interfaces = ET.SubElement(evpn_root, self._tag("ethvpn", "interfaces"))
+        interface = ET.SubElement(interfaces, self._tag("ethvpn", "interface"))
+        ET.SubElement(interface, self._tag("ethvpn", "name")).text = interface_name
+
+        access_interfaces = ET.SubElement(
+            interface, self._tag("ethvpn", "access-interfaces")
+        )
+        access_interface = ET.SubElement(
+            access_interfaces, self._tag("ethvpn", "access-interface")
+        )
+        access_interface.set(self._tag("nc", "operation"), "delete")
+        ET.SubElement(access_interface, self._tag("ethvpn", "access-if")).text = (
+            "access-if-evpn"
+        )
+        return root
+
+    def render_ethernet_vpn_access_delete(self, interface_name: str) -> str:
+        config = self._config_root()
+        config = self._append_ethernet_vpn_access_delete(config, interface_name)
+        return self._tostring(config)
 
     def _append_vlan_delete(
         self, config: ET.Element, interface: Interface, vlan: Vlan
@@ -255,6 +434,7 @@ class OcnosDeviceRenderer(DeviceRenderer):
         #                 <config>
         #                   <rt-rd-string>37186:99</rt-rd-string>
         #                   <direction>import export</direction>
+        # route_target = ET.SubElement(bgp_vrf, self._tag("bgpvrf", "route-target"))
         route_targets = ET.SubElement(bgp_vrf, self._tag("bgpvrf", "route-targets"))
         route_target = ET.SubElement(route_targets, self._tag("bgpvrf", "route-target"))
         ET.SubElement(
@@ -270,10 +450,41 @@ class OcnosDeviceRenderer(DeviceRenderer):
 
         return root
 
-    def render_evpn(self, interface: Interface, evpn: Evpn, from_azure: Optional[bool] = None) -> List[str]:
+    def render_evpn(
+        self, interface: Interface, evpn: Evpn, from_azure: Optional[bool] = None
+    ) -> str:  # ty is really unhappy about this we should look at a signature clean up once functions verified
         """Render EVPN service configuration commands for the given platform."""
-        if not from_azure:
-            from_azure = False
+        if from_azure:
+            if evpn.vlan.s_tag is None:
+                raise ValueError("Azure rendering requires vlan.s_tag")
+
+            root = self._config_root()
+            is_cni = interface.arp_cache is False or interface.nd_cache is False
+
+            # will this always evaluate true\/
+            if is_cni:
+                interface_xml = self._tostring(
+                    self._append_azure_cni_interface(self._config_root(), interface, evpn)
+                )
+            else:
+                interface_xml = self._tostring(
+                    self._append_azure_customer_interface(
+                        self._config_root(), interface, evpn
+                    )
+                )
+
+            azure_xml = [
+                interface_xml,
+                self.render_evpn_mpls_tenant(evpn),
+                self.render_ethernet_vpn_vrf_service(evpn),
+            ]
+
+            for xml in azure_xml:
+                parsed = ET.fromstring(xml)
+                for child in list(parsed):
+                    root.append(child)
+            
+            return self._tostring(root)
 
         config = self._config_root()
         config = self._append_vrf(config, evpn)
@@ -286,6 +497,123 @@ class OcnosDeviceRenderer(DeviceRenderer):
         )
 
         return self._tostring(config)
+
+    def _append_azure_cni_interface(
+        self, root: ET.Element, interface: Interface, evpn: Evpn
+    ) -> ET.Element:
+        if evpn.vlan.s_tag is None:
+            raise ValueError("Azure CNI rendering requires vlan.s_tag")
+
+        root = self._append_interface(
+            root,
+            Interface(
+                name=f"{interface.name}.{evpn.vlan.s_tag}",
+                mtu=interface.mtu,
+                description=evpn.vlan.name,
+            ),
+        )
+
+        intf = root.find(
+            f".//if:interface[if:name='{interface.name}.{evpn.vlan.s_tag}']", self.NS
+        )
+        intf_config = intf.find(self._tag("if", "config"))
+        ET.SubElement(
+            intf_config, self._tag("if", "name")
+        ).text = f"{interface.name}.{evpn.vlan.s_tag}"
+        ET.SubElement(intf_config, self._tag("if", "enable-switchport"))
+
+        extended = ET.SubElement(intf, self._tag("ifext", "extended"))
+        subenc = ET.SubElement(
+            extended, self._tag("ifext", "subinterface-encapsulation")
+        )
+        rewrite = ET.SubElement(subenc, self._tag("ifext", "rewrite"))
+        rewrite_config = ET.SubElement(rewrite, self._tag("ifext", "config"))
+        ET.SubElement(rewrite_config, self._tag("ifext", "vlan-action")).text = "pop"
+        ET.SubElement(rewrite_config, self._tag("ifext", "enable-pop")).text = "1tag"
+
+        single_tag = ET.SubElement(
+            subenc, self._tag("ifext", "single-tag-vlan-matches")
+        )
+        single_tag_match = ET.SubElement(
+            single_tag, self._tag("ifext", "single-tag-vlan-match")
+        )
+        ET.SubElement(
+            single_tag_match, self._tag("ifext", "encapsulation-type")
+        ).text = "dot1q"
+        single_tag_match_config = ET.SubElement(
+            single_tag_match, self._tag("ifext", "config")
+        )
+        ET.SubElement(
+            single_tag_match_config, self._tag("ifext", "encapsulation-type")
+        ).text = "dot1q"
+        ET.SubElement(
+            single_tag_match_config, self._tag("ifext", "outer-vlan-id")
+        ).text = str(evpn.vlan.s_tag)
+
+        return root
+
+    def _append_azure_customer_interface(
+        self,
+        root: ET.Element,
+        interface: Interface,
+        evpn: Evpn,
+        *,
+        push_tpid: str = "0x8100",
+    ) -> ET.Element:
+        # just validating
+        if evpn.vlan.s_tag is None:
+            raise ValueError("Azure customer rendering requires vlan.s_tag")
+
+        root = self._append_interface(
+            root,
+            Interface(
+                name=f"{interface.name}.{evpn.vlan.vlan_id}",
+                mtu=interface.mtu,
+                description=evpn.vlan.name,
+            ),
+        )
+
+        intf = root.find(
+            f".//if:interface[if:name='{interface.name}.{evpn.vlan.vlan_id}']", self.NS
+        )
+        intf_config = intf.find(self._tag("if", "config"))
+        ET.SubElement(
+            intf_config, self._tag("if", "name")
+        ).text = f"{interface.name}.{evpn.vlan.vlan_id}"
+        ET.SubElement(intf_config, self._tag("if", "enable-switchport"))
+
+        extended = ET.SubElement(intf, self._tag("ifext", "extended"))
+        subenc = ET.SubElement(
+            extended, self._tag("ifext", "subinterface-encapsulation")
+        )
+        rewrite = ET.SubElement(subenc, self._tag("ifext", "rewrite"))
+        rewrite_config = ET.SubElement(rewrite, self._tag("ifext", "config"))
+        ET.SubElement(rewrite_config, self._tag("ifext", "vlan-action")).text = "push"
+        ET.SubElement(
+            rewrite_config, self._tag("ifext", "push-outer-vlan-id")
+        ).text = str(evpn.vlan.s_tag)
+        ET.SubElement(rewrite_config, self._tag("ifext", "push-tpid")).text = push_tpid
+
+        single_tag = ET.SubElement(
+            subenc, self._tag("ifext", "single-tag-vlan-matches")
+        )
+        single_tag_match = ET.SubElement(
+            single_tag, self._tag("ifext", "single-tag-vlan-match")
+        )
+        ET.SubElement(
+            single_tag_match, self._tag("ifext", "encapsulation-type")
+        ).text = "dot1q"
+        single_tag_match_config = ET.SubElement(
+            single_tag_match, self._tag("ifext", "config")
+        )
+        ET.SubElement(
+            single_tag_match_config, self._tag("ifext", "encapsulation-type")
+        ).text = "dot1q"
+        ET.SubElement(
+            single_tag_match_config, self._tag("ifext", "outer-vlan-id")
+        ).text = str(evpn.vlan.vlan_id)
+
+        return root
 
     def _append_vrf_delete(self, root: ET.Element, evpn: Evpn) -> ET.Element:
         network_instances = ET.SubElement(
@@ -314,6 +642,7 @@ class OcnosDeviceRenderer(DeviceRenderer):
             bgp_vrf_config, self._tag("bgpvrf", "rd-string")
         ).text = f"{evpn.asn}:{evpn.vni}"
 
+        # route_target = ET.SubElement(bgp_vrf, self._tag("bgpvrf", "route-target"))
         route_targets = ET.SubElement(bgp_vrf, self._tag("bgpvrf", "route-targets"))
         route_target = ET.SubElement(route_targets, self._tag("bgpvrf", "route-target"))
         route_target.set(self._tag("nc", "operation"), "delete")
@@ -330,8 +659,41 @@ class OcnosDeviceRenderer(DeviceRenderer):
 
         return root
 
-    def render_evpn_delete(self, interface: Interface, evpn: Evpn) -> List[str]:
+    def render_evpn_delete(
+            self, interface: Interface, evpn: Evpn, from_azure: Optional[bool] = None
+        ) -> List[str]:
         """Render EVPN service configuration commands for the given platform."""
+        # Azure needs a bunch more removed, we should probablyupdate the base signatures
+        if from_azure:
+            if evpn.vlan.s_tag is None:
+                raise ValueError("Azure delete rendering requires vlan.s_tag")
+
+            root = self._config_root()
+            is_cni = interface.arp_cache is False or interface.nd_cache is False
+            if is_cni:
+                interface_name = f"{interface.name}.{evpn.vlan.s_tag}"
+                vlan_for_delete = Vlan(
+                    vlan_id=evpn.vlan.s_tag,
+                    name=evpn.vlan.name,
+                    s_tag=None,
+                )
+            else:
+                interface_name = f"{interface.name}.{evpn.vlan.vlan_id}"
+                vlan_for_delete = evpn.vlan
+
+            azure_delete_xml = [
+                self.render_ethernet_vpn_access_delete(interface_name),
+                self.render_evpn_mpls_tenant_delete(evpn),
+                self.render_ethernet_vpn_vrf_service_delete(evpn.description),
+                self._tostring(self._append_vrf_delete(self._config_root(), evpn)),
+                self.render_vlan_delete(interface, vlan_for_delete),
+            ]
+            for xml in azure_delete_xml:
+                parsed = ET.fromstring(xml)
+                for child in list(parsed):
+                    root.append(child)
+            return self._tostring(root)
+
         config = self._config_root()
         config = self._append_vrf_delete(config, evpn)
         config = self._append_vlan_delete(config, interface, evpn.vlan)
