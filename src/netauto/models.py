@@ -28,7 +28,7 @@ class Lag(Interface):
     members: list[Interface] = Field(default_factory=list)
     lacp_mode: Literal["active", "passive", "static"] = "active"
     min_links: int = 1
-    # this is for tracking mac vrf
+    # this is for tracking mac vrf / mlag
     system_mac: Optional[str] = None
 
 
