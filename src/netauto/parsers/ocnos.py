@@ -7,7 +7,7 @@ from typing import Any, Pattern
 
 INTERFACE_RE = re.compile(r"^interface\s+(?P<name>\S+)$")
 MAC_VRF_RE = re.compile(r"^mac\s+vrf\s+(?P<name>\S+)$")
-S0_NUMBER_RE = re.compile(r"SO\d+", re.IGNORECASE)
+# S0_NUMBER_RE = re.compile(r"SO\d+", re.IGNORECASE)
 
 class OcnosConfigParser:
     def __init__(self, config: Path | str):
@@ -84,7 +84,7 @@ class OcnosConfigParser:
                 description_match.group(1).strip() if description_match else None
             )
 
-            if "." in intf_name and intf_description and S0_NUMBER_RE.search(intf_description):
+            if "." in intf_name: # and intf_description and S0_NUMBER_RE.search(intf_description):
                 # vlan interface
                 continue
 
@@ -187,8 +187,8 @@ class OcnosConfigParser:
 
                 intf_description = desc_match.group(1).strip()
                 
-                if not S0_NUMBER_RE.search(intf_description):
-                    continue
+                # if not S0_NUMBER_RE.search(intf_description):
+                #     continue
 
                 _, vlan_part = intf_name.split(".", 1)
                 
@@ -530,7 +530,7 @@ class OcnosConfigXMLParser:
                 "oc:config/oc:description", namespaces=self.ns
             )
 
-            if "." in intf_name and intf_description and S0_NUMBER_RE.search(intf_description):
+            if "." in intf_name: # and intf_description and S0_NUMBER_RE.search(intf_description):
                 # vlan interface
                 continue
 
@@ -595,8 +595,8 @@ class OcnosConfigXMLParser:
                 "oc:config/oc:description", namespaces=self.ns
             )
 
-            if not intf_description or not S0_NUMBER_RE.search(intf_description):
-                continue
+            # if not intf_description or not S0_NUMBER_RE.search(intf_description):
+            #     continue
 
             _, vlan_part = intf_name.split(".", 1)
             vlan_name = vlan_part.strip()
