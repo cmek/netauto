@@ -70,6 +70,39 @@ class AristaConfigParser:
                 continue
         return sorted(set(ids))
 
+    def _collect_vlans(self, interface_entry: list[str]) -> dict[str, list[int]]:
+        header: Pattern[str] = re.compile(r"^interface\s+(.+?)\.(\d+)$", re.M)
+        dot1q_vlans: Pattern[str] = re.compile(
+            r"^\s+encapsulation\s+dot1q\s+vlan\s+(\d+)\s*$", re.M
+        )
+        vlan_id_re: Pattern[str] = re.compile(r"^\s+vlan\s+id\s+(\d+)\s*$", re.M)
+
+        vlans: dict[str, list[int]] = {}
+        for intf in interface_entry:
+            header_match = header.search(intf)
+            if header_match is None:
+                continue
+
+            parent_name = header_match.group(1)
+            vlan_ids: list[int] = []
+
+            encap_match = dot1q_vlans.search(intf)
+            if encap_match is not None:
+                vlan_ids = self._parse_id_list(encap_match.group(1))
+            else:
+                vlan_id_match = vlan_id_re.search(intf)
+                if vlan_id_match is not None:
+                    vlan_ids = self._parse_id_list(vlan_id_match.group(1))
+                else:
+                    continue
+
+            vlans.setdefault(parent_name, []).extend(vlan_ids)
+
+        for parent_name, vlans_entry in vlans.items():
+            vlans[parent_name] = sorted(set(vlans_entry))
+
+        return vlans
+
     def parse_interfaces(self, interface_entry: list[str]) -> list[Interface]:
         header: Pattern[str] = re.compile(r"^interface\s+(\S+)$", re.M)
         description: Pattern[str] = re.compile(r"^\s+description\s+(.+)$", re.M)
@@ -89,6 +122,8 @@ class AristaConfigParser:
         )
 
         interfaces: list[Interface] = []
+        subinterface_vlans = self._collect_vlans(interface_entry)
+
         for intf in interface_entry:
             header_match = header.search(intf)
             if header_match is None:
@@ -114,6 +149,10 @@ class AristaConfigParser:
             trunk_match = trunk_allowed.search(intf)
             if trunk_match:
                 for vlan_id in self._parse_id_list(trunk_match.group(1)):
+                    trunk_vlans.append(Vlan(vlan_id=vlan_id))  # pyright: ignore[reportCallIssue]
+
+            for vlan_id in subinterface_vlans.get(name, []):
+                if not any(existing.vlan_id == vlan_id for existing in trunk_vlans):
                     trunk_vlans.append(Vlan(vlan_id=vlan_id))  # pyright: ignore[reportCallIssue]
 
             cg_match = channel_group.search(intf)
@@ -186,9 +225,16 @@ class AristaConfigParser:
         member_group: Pattern[str] = re.compile(
             r"^\s+channel-group\s+(\d+)(?:\s+mode\s+(active|passive|on))?\s*$", re.M
         )
+        member_trunk_allowed: Pattern[str] = re.compile(
+            r"^\s+switchport trunk allowed vlan\s+(.+)$", re.M
+        )
+        member_access_vlan: Pattern[str] = re.compile(
+            r"^\s+switchport access vlan\s+(\d+)\s*$", re.M
+        )
 
         members_by_lag: dict[str, list[Interface]] = {}
         lacp_mode_by_lag: dict[str, str] = {}
+        member_vlans_by_lag: dict[str, list[int]] = {}
 
         for intf in interface_entry:
             h = member_header.search(intf)
@@ -210,6 +256,21 @@ class AristaConfigParser:
             elif mode in {"active", "passive"}:
                 lacp_mode_by_lag[lag_name] = mode
 
+            member_trunk = member_trunk_allowed.search(intf)
+            member_access = member_access_vlan.search(intf)
+
+            if member_trunk:
+                member_vlans_by_lag.setdefault(lag_name, [])
+                for vlan_id in self._parse_id_list(member_trunk.group(1)):
+                    if vlan_id not in member_vlans_by_lag[lag_name]:
+                        member_vlans_by_lag[lag_name].append(vlan_id)
+            elif member_access is not None:
+                vlan_id = int(member_access.group(1))
+                member_vlans_by_lag.setdefault(lag_name, [])
+                if vlan_id not in member_vlans_by_lag[lag_name]:
+                    member_vlans_by_lag[lag_name].append(vlan_id)
+
+        subinterface_vlans = self._collect_vlans(interface_entry)
         lags: list[Lag] = []
         for intf in interface_entry:
             h = header.search(intf)
@@ -234,8 +295,17 @@ class AristaConfigParser:
 
             trunk_vlans: list[Vlan] = []
             trunk_match = trunk_allowed.search(intf)
+
             if trunk_match:
                 for vlan_id in self._parse_id_list(trunk_match.group(1)):
+                    trunk_vlans.append(Vlan(vlan_id=vlan_id))  # pyright: ignore[reportCallIssue]
+    
+            for vlan_id in subinterface_vlans.get(lag_name, []):
+                if not any(existing.vlan_id == vlan_id for existing in trunk_vlans):
+                    trunk_vlans.append(Vlan(vlan_id=vlan_id))  # pyright: ignore[reportCallIssue]
+
+            for vlan_id in member_vlans_by_lag.get(lag_name, []):
+                if not any(existing.vlan_id == vlan_id for existing in trunk_vlans):
                     trunk_vlans.append(Vlan(vlan_id=vlan_id))  # pyright: ignore[reportCallIssue]
 
             mode = "access"
