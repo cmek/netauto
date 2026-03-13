@@ -125,17 +125,25 @@ class OcnosConfigParser:
 
         return interfaces
 
-    def parse_vlans(self, vlan_entry: list[str]) -> list[Vlan]:
+    def parse_vlans(
+        self, vlan_entry: list[str], interface_entry: list[str] | None = None
+    ) -> list[Vlan]:
         header: Pattern[str] = re.compile(r"^vlan\s+(\d+)$", re.M)
         name: Pattern[str] = re.compile(r"^\s*name\s+(.+)$", re.M)
         s_tag: Pattern[str] = re.compile(
             r"^\s*(?:s-tag|service-vlan)\s+(\d+)\s*$", re.M
         )
+        interface_header: Pattern[str] = re.compile(
+            r"^interface\s+(\S+)(?:\s+(switchport))?$", re.M
+        )
+        description: Pattern[str] = re.compile(r"^\s*description\s+(.+)$", re.M)
 
         vlans: list[Vlan] = []
+        seen_vlans: set[tuple[int, str | None, int | None]] = set()
 
         for vlan_block in vlan_entry:
             header_match = header.search(vlan_block)
+          
             if header_match is None:
                 continue
 
@@ -146,6 +154,11 @@ class OcnosConfigParser:
 
             s_tag_match = s_tag.search(vlan_block)
             vlan_s_tag = int(s_tag_match.group(1)) if s_tag_match else None
+            vlan_key = (vlan_id, vlan_name, vlan_s_tag)
+            
+            if vlan_key in seen_vlans:
+                continue
+            seen_vlans.add(vlan_key)
 
             vlans.append(
                 Vlan(
@@ -154,6 +167,49 @@ class OcnosConfigParser:
                     s_tag=vlan_s_tag,
                 )
             )
+
+        if interface_entry is not None:
+            for intf in interface_entry:
+                header_match = interface_header.search(intf)
+                
+                if header_match is None:
+                    continue
+
+                intf_name = header_match.group(1)
+               
+                if "." not in intf_name:
+                    continue
+
+                desc_match = description.search(intf)
+                
+                if desc_match is None:
+                    continue
+
+                intf_description = desc_match.group(1).strip()
+                
+                if not S0_NUMBER_RE.search(intf_description):
+                    continue
+
+                _, vlan_part = intf_name.split(".", 1)
+                
+                if not vlan_part.isdigit():
+                    continue
+
+                vlan_id = int(vlan_part)
+                vlan_key = (vlan_id, intf_description, None)
+               
+                if vlan_key in seen_vlans:
+                    continue
+               
+                seen_vlans.add(vlan_key)
+
+                vlans.append(
+                    Vlan(
+                        vlan_id=vlan_id,
+                        name=intf_description,
+                        s_tag=None,
+                    )
+                )
 
         return vlans
 
@@ -402,7 +458,9 @@ class OcnosConfigParser:
 
         interfaces: list[Interface] = self.parse_interfaces(interface_data)
         lags: list[Lag] = self.parse_lags(interface_data)
-        vlans: list[Vlan] = self.parse_vlans(vlan_data)
+        vlans: list[Vlan] = self.parse_vlans(
+            vlan_data, interface_entry=interface_data
+        )
         network_instances: list[RoutingInstance] = self.parse_network_instances(
             network_instance_data
         )
