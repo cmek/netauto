@@ -9,7 +9,7 @@ def main() -> int:
     parser.add_argument(
         "--input",
         type=Path,
-        default=Path("./configs/arista/"),
+        default=Path("./configs/cli/arista/"),
         help="Path to a config file or directory of *.config.txt files",
     )
     parser.add_argument(

@@ -1,4 +1,5 @@
 import re
+import json
 from pathlib import Path
 from typing import Any, Pattern
 from netauto.models import Evpn, Interface, Lag, RoutingInstance, Vlan
@@ -17,7 +18,35 @@ class AristaConfigParser:
         if not raw.strip():
             raise ValueError("Empty config data given")
 
-        self.config: str = raw
+        self.config: str = self._extract_config(raw)
+
+    def _extract_config(self, raw: str) -> str:
+        raw = raw.strip()
+        # cli config not just json
+        if not raw.startswith("{"):
+            return raw
+
+        # try to load json
+        try:
+            parsed_data = json.loads(raw)
+        except json.JSONDecodeError:
+            raise ValueError("Failed to parse input data")
+
+        outputs: list[str] = []
+
+        # turn the json into a string
+        if isinstance(parsed_data, dict):
+            result = parsed_data.get("result")
+            if isinstance(result, list):
+                for entry in result:
+                    if isinstance(entry, dict):
+                        output = entry.get("output")
+                        if isinstance(output, str):
+                            outputs.append(output)
+                    elif isinstance(entry, str):
+                        outputs.append(entry)
+
+        return "\n".join(outputs).strip()
 
     def _parse_id_list(self, text: str) -> list[int]:
         ids: list[int] = []
