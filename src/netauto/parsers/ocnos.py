@@ -23,6 +23,7 @@ class OcnosConfigParser:
             raise ValueError("Empty config data given")
 
         self.config: str = config_text
+        # ASN parsing disabled temporarily
 
     def _parse_vlan_list(self, vlan_text: str) -> list[int]:
         """Parse ranges/lists like '10,20,30-32' into explicit ints."""
@@ -465,7 +466,6 @@ class OcnosConfigParser:
             network_instance_data
         )
         evpns: list[Evpn] = self.parse_evpns(interface_data, network_instances)
-
         return {
             "interfaces": interfaces,
             "lags": lags,
@@ -758,6 +758,13 @@ class OcnosConfigXMLParser:
                         if vlan_id not in existing:
                             trunk_vlans.append(Vlan(vlan_id=vlan_id, s_tag=None))
                             existing.add(vlan_id)
+                    
+                    # update the parent so the data is not lost
+                    parent_lag = lag_interfaces_by_name.get(parent_name)
+                    if parent_lag is not None:
+                        parent_lag.trunk_vlans = trunk_vlans
+                        if parent_lag.mode != "routed" and parent_lag.trunk_vlans:
+                            parent_lag.mode = "trunk"
 
                 continue
 
@@ -813,7 +820,8 @@ class OcnosConfigXMLParser:
                 int(vlan_text) if vlan_text and vlan_text.isdigit() else None
             )
 
-            trunk_vlans = trunk_vlans_by_parent.get(lag_name, [])
+            # set default incase it doesnt exist yet
+            trunk_vlans = trunk_vlans_by_parent.setdefault(lag_name, [])
             mode = "access" if has_switchport else "routed"
             if has_switchport and trunk_vlans:
                 mode = "trunk"
