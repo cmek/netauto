@@ -7,7 +7,7 @@ from typing import Any, Pattern
 
 INTERFACE_RE = re.compile(r"^interface\s+(?P<name>\S+)$")
 MAC_VRF_RE = re.compile(r"^mac\s+vrf\s+(?P<name>\S+)$")
-
+S0_NUMBER_RE = re.compile(r"SO\d+", re.IGNORECASE)
 
 class OcnosConfigParser:
     def __init__(self, config: Path | str):
@@ -71,14 +71,22 @@ class OcnosConfigParser:
                 continue
 
             intf_name = header_match.group(1)
+            if not intf_name or not isinstance(intf_name, str):
+                raise ValueError(f"Invalid interface name: {intf_name}")
+
             has_switchport = bool(header_match.group(2)) or bool(
                 switch_port.search(intf)
             )
 
             description_match = description.search(intf)
+
             intf_description = (
                 description_match.group(1).strip() if description_match else None
             )
+
+            if "." in intf_name and intf_description and S0_NUMBER_RE.search(intf_description):
+                # vlan interface
+                continue
 
             is_enabled = True
             if shutdown.search(intf):
@@ -430,7 +438,7 @@ class OcnosConfigXMLParser:
                 return input_config
             case Path():
                 if not input_config.exists():
-                    raise ValueError(f"Config path does not exist: {input_config}")
+                    raise ValueError(f"Config path does not exist: {input_config.absolute()}")
                 config_text = input_config.read_text(encoding="utf-8", errors="ignore")
             case str():
                 config_text = input_config
@@ -463,6 +471,10 @@ class OcnosConfigXMLParser:
             intf_description = intf.findtext(
                 "oc:config/oc:description", namespaces=self.ns
             )
+
+            if "." in intf_name and intf_description and S0_NUMBER_RE.search(intf_description):
+                # vlan interface
+                continue
 
             # It seems theres only a flag rather than something striclt enabled
             is_enabled = intf.find("oc:config/oc:shutdown", namespaces=self.ns) is None
@@ -507,35 +519,48 @@ class OcnosConfigXMLParser:
 
     def parse_vlans(self) -> list[Vlan]:
         vlans: list[Vlan] = []
+        seen_vlan_names: set[str] = set()
 
-        # # pseudocode till i can find a example with some vlan
-        # for vlan in self.config.iterfind(".//oc:vlans", namespaces=self.ns):
-        # vlan_id_text = vlan.findtext(".//{*}id")
-        # if vlan_id_text is None:
-        #     vlan_id_text = vlan.findtext(".//{*}vlan-id")
-        # if not vlan_id_text:
-        #     raise ValueError("Unable to find vlan id")
+        for intf in self.config.iterfind(
+            ".//oc:interfaces/oc:interface", namespaces=self.ns
+        ):
+            intf_name = intf.findtext("oc:name", namespaces=self.ns)
 
-        # vlan_id = int(vlan_id_text)
+            if not intf_name:
+                # fallback for name just incase
+                intf_name = intf.findtext("oc:config/oc:name", namespaces=self.ns)
+            
+            if not intf_name or "." not in intf_name:
+                continue
 
-        # vlan_name = vlan.findtext(".//{*}name")
-        # if vlan_name is None:
-        #     raise ValueError("Unable to find vlan name")
-        # if vlan_name:
-        #     vlan_name = vlan_name.strip()
+            intf_description = intf.findtext(
+                "oc:config/oc:description", namespaces=self.ns
+            )
 
-        # s_tag_text = vlan.findtext(".//{*}s-tag")
-        # if s_tag_text is None:
-        #     s_tag_text = vlan.findtext(".//{*}service-vlan")
-        # vlan_s_tag = int(s_tag_text) if s_tag_text else None
+            if not intf_description or not S0_NUMBER_RE.search(intf_description):
+                continue
 
-        # vlans.append(
-        #     Vlan(
-        #         vlan_id=vlan_id,
-        #         name=vlan_name,
-        #         s_tag=vlan_s_tag,
-        #     )
-        # )
+            _, vlan_part = intf_name.split(".", 1)
+            vlan_name = vlan_part.strip()
+
+            if not vlan_name.isdigit():
+                continue
+
+            vlan_id = int(vlan_name)
+    
+            if f"{vlan_id}:{intf_description}" in seen_vlan_names:
+                print(f"{vlan_id}:{intf_description} has been seen before")
+                continue
+
+            seen_vlan_names.add(f"{vlan_id}:{intf_description}")
+
+            vlans.append(
+                Vlan(
+                    vlan_id=vlan_id,
+                    name=intf_description,
+                    s_tag=None,
+                )
+            )
 
         return vlans
 
