@@ -513,6 +513,8 @@ class OcnosConfigXMLParser:
 
     def parse_interfaces(self) -> list[Interface]:
         interfaces: list[Interface] = []
+        interfaces_by_name: dict[str, Interface] = {}
+        trunk_vlans_by_parent: dict[str, list[Vlan]] = {}
 
         for intf in self.config.iterfind(
             ".//oc:interfaces/oc:interface", namespaces=self.ns
@@ -523,16 +525,39 @@ class OcnosConfigXMLParser:
                 intf_name = intf.findtext("oc:config/oc:name", namespaces=self.ns)
             if not intf_name:
                 raise ValueError("Unable to determine name from interface data")
+            
+            # vlan interface
+            if "." in intf_name:
+                parent_name = intf_name.split(".", 1)[0]
+                vlan_ids = {
+                        vlan_text.text
+                        for vlan_text in intf.xpath(
+                            ".//ext:subinterface-encapsulation//ext:config/ext:outer-vlan-id | .//ext:subinterface-encapsulation//ext:config/ext:inner-vlan-id",
+                            namespaces=self.ns,
+                        )
+                        if vlan_text.text is not None
+                    }
+
+                if vlan_ids:
+                    trunk_vlans = trunk_vlans_by_parent.setdefault(parent_name, [])
+                    existing = {v.vlan_id for v in trunk_vlans}
+                    for vlan_id in vlan_ids:
+                        if vlan_id not in existing:
+                            trunk_vlans.append(Vlan(vlan_id=vlan_id, s_tag=None))
+                            existing.add(vlan_id)
+
+                    parent_interface = interfaces_by_name.get(parent_name)
+                    if parent_interface is not None:
+                        parent_interface.trunk_vlans = trunk_vlans
+                        if parent_interface.mode != "routed" and parent_interface.trunk_vlans:
+                            parent_interface.mode = "trunk"
+                    continue
 
             mtu_text = intf.findtext("oc:config/oc:mtu", namespaces=self.ns)
             intf_mtu = int(mtu_text) if mtu_text and mtu_text.isdigit() else None
             intf_description = intf.findtext(
                 "oc:config/oc:description", namespaces=self.ns
             )
-
-            if "." in intf_name: # and intf_description and S0_NUMBER_RE.search(intf_description):
-                # vlan interface
-                continue
 
             # It seems theres only a flag rather than something striclt enabled
             is_enabled = intf.find("oc:config/oc:shutdown", namespaces=self.ns) is None
@@ -542,6 +567,10 @@ class OcnosConfigXMLParser:
             )
 
             mode = "access" if has_switchport else "routed"
+            trunk_vlans = trunk_vlans_by_parent.get(intf_name, [])
+
+            if has_switchport and trunk_vlans:
+                mode = "trunk"
 
             vlan_text = intf.findtext(
                 ".//ext:subinterface-encapsulation//ext:config/ext:outer-vlan-id",
@@ -561,17 +590,19 @@ class OcnosConfigXMLParser:
                 else None
             )
 
-            interfaces.append(
-                Interface(
-                    name=intf_name,
-                    description=intf_description,
-                    enabled=is_enabled,
-                    mtu=intf_mtu,
-                    mode=mode,
-                    access_vlan=intf_access_vlan,
-                    lag_member_of=lag_member_of,
-                )
+            interface = Interface(
+                name=intf_name,
+                description=intf_description,
+                enabled=is_enabled,
+                mtu=intf_mtu,
+                mode=mode,
+                access_vlan=intf_access_vlan,
+                trunk_vlans=trunk_vlans,
+                lag_member_of=lag_member_of,
             )
+
+            interfaces_by_name[intf_name] = interface
+            interfaces.append(interface)
 
         return interfaces
 
@@ -680,10 +711,8 @@ class OcnosConfigXMLParser:
         members_by_lag: dict[str, list[Interface]] = {}
         lacp_by_lag: dict[str, str] = {}
         system_mac_by_lag: dict[str, str] = {}
-
-        interfaces = list(
-            self.config.iterfind(".//oc:interfaces/oc:interface", namespaces=self.ns)
-        )
+        trunk_vlans_by_parent: dict[str, list[Vlan]] = {}
+        lag_interfaces_by_name: dict[str, Lag] = {}
 
         for evpn_intf in self.config.iterfind(
             ".//evpn:interfaces/evpn:interface", namespaces=self.ns
@@ -702,57 +731,71 @@ class OcnosConfigXMLParser:
             if evpn_system_mac:
                 system_mac_by_lag[evpn_name] = evpn_system_mac
 
-        # find the members first
-        for intf in interfaces:
+        for intf in self.config.iterfind(".//oc:interfaces/oc:interface", namespaces=self.ns):
             intf_name = intf.findtext("oc:name", namespaces=self.ns)
+
             if not intf_name:
                 intf_name = intf.findtext("oc:config/oc:name", namespaces=self.ns)
-            if not intf_name or "." in intf_name:
+
+            if not intf_name:
+                continue
+
+            if "." in intf_name:
+                parent_name = intf_name.split(".", 1)[0]
+                vlan_ids = {
+                        vlan_text.text
+                        for vlan_text in intf.xpath(
+                            ".//ext:subinterface-encapsulation//ext:config/ext:outer-vlan-id | .//ext:subinterface-encapsulation//ext:config/ext:inner-vlan-id",
+                            namespaces=self.ns,
+                        )
+                        if vlan_text.text is not None
+                    }
+
+                if vlan_ids:
+                    trunk_vlans = trunk_vlans_by_parent.setdefault(parent_name, [])
+                    existing = {v.vlan_id for v in trunk_vlans}
+                    for vlan_id in vlan_ids:
+                        if vlan_id not in existing:
+                            trunk_vlans.append(Vlan(vlan_id=vlan_id, s_tag=None))
+                            existing.add(vlan_id)
+
                 continue
 
             aggregate_id = intf.findtext(
                 "agg:member-aggregation/agg:config/agg:aggregate-id",
                 namespaces=self.ns,
             )
-            if not aggregate_id:
-                continue
-            if not aggregate_id.isdigit():
-                raise ValueError("LAG has non number id")
 
-            #  po anmed by aggregate-id.
-            lag_name = f"po{aggregate_id}"
-            members_by_lag.setdefault(lag_name, []).append(Interface(name=intf_name))
+            if aggregate_id:
+                if not aggregate_id.isdigit():
+                    raise ValueError("LAG has non number id")
 
-            lacp_mode = intf.findtext(
-                "agg:member-aggregation/agg:config/agg:lacp-mode",
-                namespaces=self.ns,
-            )
-            if not lacp_mode:
-                raise ValueError("No LACP mode configured")
+                #  po anmed by aggregate-id.
+                lag_name = f"po{aggregate_id}"
+                members_by_lag.setdefault(lag_name, []).append(Interface(name=intf_name))
 
-            if lacp_mode in {"active", "passive", "static"}:
-                lacp_by_lag[lag_name] = lacp_mode
-            else:
-                raise ValueError(f"Unsupported LACP mode: {lacp_mode}")
+                lacp_mode = intf.findtext(
+                    "agg:member-aggregation/agg:config/agg:lacp-mode",
+                    namespaces=self.ns,
+                )
+        
+                if not lacp_mode:
+                    raise ValueError("No LACP mode configured")
 
-        # now make the lags
-        for intf in interfaces:
-            lag_name = intf.findtext("oc:name", namespaces=self.ns)
-            if not lag_name:
-                lag_name = intf.findtext("oc:config/oc:name", namespaces=self.ns)
+                if lacp_mode in {"active", "passive", "static"}:
+                    lacp_by_lag[lag_name] = lacp_mode
+                else:
+                    raise ValueError(f"Unsupported LACP mode: {lacp_mode}")
 
-            # skip anything not needed
-            if lag_name not in lacp_by_lag:
                 continue
 
+            if not intf_name.startswith("po"):
+                continue
+
+            lag_name = intf_name
             lag_description = intf.findtext(
                 "oc:config/oc:description", namespaces=self.ns
             )
-            lag_system_mac = system_mac_by_lag.get(lag_name)
-            if not lag_system_mac:
-                lag_system_mac = intf.findtext(
-                    "oc:config/oc:system-mac", namespaces=self.ns
-                )
             mtu_text = intf.findtext("oc:config/oc:mtu", namespaces=self.ns)
             lag_mtu = int(mtu_text) if mtu_text and mtu_text.isdigit() else None
 
@@ -761,7 +804,6 @@ class OcnosConfigXMLParser:
                 intf.find("oc:config/oc:enable-switchport", namespaces=self.ns)
                 is not None
             )
-            mode = "access" if has_switchport else "routed"
 
             vlan_text = intf.findtext(
                 ".//ext:subinterface-encapsulation//ext:config/ext:outer-vlan-id",
@@ -771,26 +813,35 @@ class OcnosConfigXMLParser:
                 int(vlan_text) if vlan_text and vlan_text.isdigit() else None
             )
 
-            # i dont see min links in conf? did that come from us?
+            trunk_vlans = trunk_vlans_by_parent.get(lag_name, [])
+            mode = "access" if has_switchport else "routed"
+            if has_switchport and trunk_vlans:
+                mode = "trunk"
 
-            lags.append(
-                Lag(
-                    name=lag_name,
-                    description=lag_description,
-                    enabled=is_enabled,
-                    mtu=lag_mtu,
-                    mode=mode,
-                    access_vlan=lag_access_vlan,
-                    trunk_vlans=[],
-                    members=members_by_lag.get(
-                        lag_name, []
-                    ),  # Theres lags without members in the example conf
-                    lacp_mode=lacp_by_lag[
-                        lag_name
-                    ],  # ty:ignore[invalid-argument-type] # pyright: ignore[reportArgumentType]
-                    system_mac=lag_system_mac,
-                )
+            lag_interfaces_by_name[lag_name] = Lag(
+                name=lag_name,
+                description=lag_description,
+                enabled=is_enabled,
+                mtu=lag_mtu,
+                mode=mode,
+                access_vlan=lag_access_vlan,
+                trunk_vlans=trunk_vlans,
+                members=members_by_lag.get(lag_name, []),
+                system_mac=system_mac_by_lag.get(
+                    lag_name
+                ) or intf.findtext("oc:config/oc:system-mac", namespaces=self.ns),
             )
+
+        for lag_name, lag_interface in lag_interfaces_by_name.items():
+            if lag_name not in lacp_by_lag:
+                continue
+
+            lag_interface.members = members_by_lag.get(
+                lag_name, []
+            )  # Theres lags without members in the example conf
+            lag_interface.lacp_mode = lacp_by_lag[lag_name]  # pyright: ignore[reportAttributeAccessIssue] # ty:ignore[invalid-assignment]
+
+            lags.append(lag_interface)
 
         return lags
 
