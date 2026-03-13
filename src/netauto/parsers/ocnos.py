@@ -1,7 +1,7 @@
 import re
 from lxml import etree
 from lxml.etree import Element
-from netauto.models import Evpn, Interface, Lag, RoutingInstance, Vlan
+from netauto.models import Asn, Evpn, Interface, Lag, RoutingInstance, Vlan
 from pathlib import Path
 from typing import Any, Pattern
 
@@ -23,7 +23,6 @@ class OcnosConfigParser:
             raise ValueError("Empty config data given")
 
         self.config: str = config_text
-        # ASN parsing disabled temporarily
 
     def _parse_vlan_list(self, vlan_text: str) -> list[int]:
         """Parse ranges/lists like '10,20,30-32' into explicit ints."""
@@ -444,6 +443,17 @@ class OcnosConfigParser:
 
         return evpns
 
+    def parse_asn(self) -> Asn | None:
+        match = re.search(r"^router bgp\s+(\d+)", self.config, flags=re.M)
+        if match is None:
+            print("failed to detect any asn")
+            return None
+
+        try:
+            return Asn(asn=int(match.group(1)))
+        except ValueError:
+            return None
+
     def parse_ocnos_config(self) -> dict[str, Any]:
         config_parts = [
             entry.strip("\n") for entry in re.split(r"^!", self.config, flags=re.M)
@@ -466,12 +476,14 @@ class OcnosConfigParser:
             network_instance_data
         )
         evpns: list[Evpn] = self.parse_evpns(interface_data, network_instances)
+        asn = self.parse_asn()
         return {
             "interfaces": interfaces,
             "lags": lags,
             "vlans": vlans,
             "network_instances": network_instances,
             "evpns": evpns,
+            "asn": asn,
         }
 
 
@@ -484,6 +496,7 @@ class OcnosConfigXMLParser:
         "ni": "http://www.ipinfusion.com/yang/ocnos/ipi-network-instance",
         "vrf": "http://www.ipinfusion.com/yang/ocnos/ipi-vrf",
         "bgp": "http://www.ipinfusion.com/yang/ocnos/ipi-bgp-vrf",
+        "bgp_core": "http://www.ipinfusion.com/yang/ocnos/ipi-bgp",
         "vx": "http://www.ipinfusion.com/yang/ocnos/ipi-vxlan",
     }
 
@@ -930,16 +943,38 @@ class OcnosConfigXMLParser:
 
         return evpns
 
+    def parse_asn(self) -> Asn | None:
+        for bgp_instance in self.config.iterfind(
+            ".//bgp_core:bgp/bgp_core:bgp-instance", namespaces=self.ns
+        ):
+            bgp_as = bgp_instance.findtext("bgp_core:bgp-as", namespaces=self.ns)
+            if not bgp_as:
+                bgp_as = bgp_instance.findtext(
+                    "bgp_core:config/bgp_core:bgp-as", namespaces=self.ns
+                )
+
+            if bgp_as is None or not bgp_as.strip():
+                continue
+
+            try:
+                return Asn(asn=int(bgp_as))
+            except ValueError:
+                continue
+
+        return None
+
     def parse_ocnos_config(self) -> dict[str, Any]:
         interfaces = self.parse_interfaces()
         lags = self.parse_lags()
         vlans = self.parse_vlans()
         network_instances = self.parse_network_instances()
         evpns = self.parse_evpns()
+        asn = self.parse_asn()
         return {
             "interfaces": interfaces,
             "lags": lags,
             "vlans": vlans,
             "network_instances": network_instances,
             "evpns": evpns,
+            "asn": asn,
         }

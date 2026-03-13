@@ -2,7 +2,7 @@ import re
 import json
 from pathlib import Path
 from typing import Any, Pattern
-from netauto.models import Evpn, Interface, Lag, RoutingInstance, Vlan
+from netauto.models import Asn, Evpn, Interface, Lag, RoutingInstance, Vlan
 
 
 class AristaConfigParser:
@@ -346,6 +346,16 @@ class AristaConfigParser:
                 return entry
         return None
 
+    def parse_asn(self) -> Asn | None:
+        asn = re.search(r"^router bgp\s+(\d+)", self.config, flags=re.M)
+        if asn is None:
+            return None
+
+        try:
+            return Asn(asn=int(asn.group(1)))
+        except ValueError:
+            return None
+
     def _parse_bgp_instances_and_vlan_map(
         self, bgp_block: str
     ) -> tuple[list[RoutingInstance], dict[int, tuple[str, str]]]:
@@ -485,6 +495,7 @@ class AristaConfigParser:
         vlans = self.parse_vlans(vlan_data)
         network_instances = self.parse_network_instances(config_parts)
         evpns = self.parse_evpns(interface_data, vlans, config_parts)
+        asn = self.parse_asn()
 
         return {
             "interfaces": interfaces,
@@ -492,4 +503,5 @@ class AristaConfigParser:
             "vlans": vlans,
             "network_instances": network_instances,
             "evpns": evpns,
+            "asn": asn,
         }

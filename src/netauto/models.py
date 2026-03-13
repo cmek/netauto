@@ -1,5 +1,5 @@
-from typing import Optional, Literal
-from pydantic import BaseModel, Field
+from typing import Literal, Optional
+from pydantic import BaseModel, Field, field_validator
 
 
 class Vlan(BaseModel):
@@ -65,3 +65,19 @@ class RoutingInstance(BaseModel):
     rd: str
     rt_rd: str
     # direction: str
+
+class Asn(BaseModel):
+    # Optional single ASN in a single-router config context
+    asn: int
+
+    @field_validator("asn")
+    @classmethod
+    def validate_asn(cls, asn: int) -> int:
+        if asn < 1:
+            raise ValueError("ASN must be greater than 0")
+
+        # ASN is valid as either 2-byte or 4-byte in the range 1..4294967295.
+        if asn > 0xFFFFFFFF:
+            raise ValueError("ASN must not exceed 4294967295")
+
+        return asn
