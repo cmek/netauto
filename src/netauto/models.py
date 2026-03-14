@@ -20,9 +20,10 @@ class Interface(BaseModel):
     # For LAG
     lag_member_of: Optional[str] = None  # Name of the Port-Channel
     # For Azure VPNS
-    arp_cache: Optional[bool] = None 
-    nd_cache: Optional[bool] = None 
+    arp_cache: Optional[bool] = None
+    nd_cache: Optional[bool] = None
     vpn_id: Optional[int] = None
+
 
 class Lag(Interface):
     members: list[Interface] = Field(default_factory=list)
@@ -51,6 +52,7 @@ class Evpn(BaseModel):
     asn: int
     vni: int
 
+
 class EvpnService(Evpn):
     connections: list[Connection]
     vlan_id: int
@@ -65,6 +67,7 @@ class RoutingInstance(BaseModel):
     rd: str
     rt_rd: str
     # direction: str
+
 
 class Asn(BaseModel):
     # Optional single ASN in a single-router config context
@@ -81,3 +84,13 @@ class Asn(BaseModel):
             raise ValueError("ASN must not exceed 4294967295")
 
         return asn
+
+
+class Config(BaseModel):
+    #    hostname: str
+    asn: Optional[Asn] = None
+    interfaces: list[Interface] = Field(default_factory=list)
+    lags: list[Lag] = Field(default_factory=list)
+    vrfs: list[RoutingInstance] = Field(default_factory=list)
+    evpns: list[Evpn] = Field(default_factory=list)
+    vlans: list[Vlan] = Field(default_factory=list)

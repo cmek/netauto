@@ -1,13 +1,14 @@
 import re
 from lxml import etree
 from lxml.etree import Element
-from netauto.models import Asn, Evpn, Interface, Lag, RoutingInstance, Vlan
+from netauto.models import Config, Asn, Evpn, Interface, Lag, RoutingInstance, Vlan
 from pathlib import Path
 from typing import Any, Pattern
 
 INTERFACE_RE = re.compile(r"^interface\s+(?P<name>\S+)$")
 MAC_VRF_RE = re.compile(r"^mac\s+vrf\s+(?P<name>\S+)$")
 # S0_NUMBER_RE = re.compile(r"SO\d+", re.IGNORECASE)
+
 
 class OcnosConfigParser:
     def __init__(self, config: Path | str):
@@ -84,7 +85,9 @@ class OcnosConfigParser:
                 description_match.group(1).strip() if description_match else None
             )
 
-            if "." in intf_name: # and intf_description and S0_NUMBER_RE.search(intf_description):
+            if (
+                "." in intf_name
+            ):  # and intf_description and S0_NUMBER_RE.search(intf_description):
                 # vlan interface
                 continue
 
@@ -143,7 +146,7 @@ class OcnosConfigParser:
 
         for vlan_block in vlan_entry:
             header_match = header.search(vlan_block)
-          
+
             if header_match is None:
                 continue
 
@@ -155,7 +158,7 @@ class OcnosConfigParser:
             s_tag_match = s_tag.search(vlan_block)
             vlan_s_tag = int(s_tag_match.group(1)) if s_tag_match else None
             vlan_key = (vlan_id, vlan_name, vlan_s_tag)
-            
+
             if vlan_key in seen_vlans:
                 continue
             seen_vlans.add(vlan_key)
@@ -171,36 +174,36 @@ class OcnosConfigParser:
         if interface_entry is not None:
             for intf in interface_entry:
                 header_match = interface_header.search(intf)
-                
+
                 if header_match is None:
                     continue
 
                 intf_name = header_match.group(1)
-               
+
                 if "." not in intf_name:
                     continue
 
                 desc_match = description.search(intf)
-                
+
                 if desc_match is None:
                     continue
 
                 intf_description = desc_match.group(1).strip()
-                
+
                 # if not S0_NUMBER_RE.search(intf_description):
                 #     continue
 
                 _, vlan_part = intf_name.split(".", 1)
-                
+
                 if not vlan_part.isdigit():
                     continue
 
                 vlan_id = int(vlan_part)
                 vlan_key = (vlan_id, intf_description, None)
-               
+
                 if vlan_key in seen_vlans:
                     continue
-               
+
                 seen_vlans.add(vlan_key)
 
                 vlans.append(
@@ -469,22 +472,20 @@ class OcnosConfigParser:
 
         interfaces: list[Interface] = self.parse_interfaces(interface_data)
         lags: list[Lag] = self.parse_lags(interface_data)
-        vlans: list[Vlan] = self.parse_vlans(
-            vlan_data, interface_entry=interface_data
-        )
+        vlans: list[Vlan] = self.parse_vlans(vlan_data, interface_entry=interface_data)
         network_instances: list[RoutingInstance] = self.parse_network_instances(
             network_instance_data
         )
         evpns: list[Evpn] = self.parse_evpns(interface_data, network_instances)
         asn = self.parse_asn()
-        return {
-            "interfaces": interfaces,
-            "lags": lags,
-            "vlans": vlans,
-            "network_instances": network_instances,
-            "evpns": evpns,
-            "asn": asn,
-        }
+        return Config(
+            interfaces=interfaces,
+            lags=lags,
+            vlans=vlans,
+            vrfs=network_instances,
+            evpns=evpns,
+            asn=asn,
+        )
 
 
 class OcnosConfigXMLParser:
@@ -509,7 +510,9 @@ class OcnosConfigXMLParser:
                 return input_config
             case Path():
                 if not input_config.exists():
-                    raise ValueError(f"Config path does not exist: {input_config.absolute()}")
+                    raise ValueError(
+                        f"Config path does not exist: {input_config.absolute()}"
+                    )
                 config_text = input_config.read_text(encoding="utf-8", errors="ignore")
             case str():
                 config_text = input_config
@@ -538,18 +541,18 @@ class OcnosConfigXMLParser:
                 intf_name = intf.findtext("oc:config/oc:name", namespaces=self.ns)
             if not intf_name:
                 raise ValueError("Unable to determine name from interface data")
-            
+
             # vlan interface
             if "." in intf_name:
                 parent_name = intf_name.split(".", 1)[0]
                 vlan_ids = {
-                        vlan_text.text
-                        for vlan_text in intf.xpath(
-                            ".//ext:subinterface-encapsulation//ext:config/ext:outer-vlan-id | .//ext:subinterface-encapsulation//ext:config/ext:inner-vlan-id",
-                            namespaces=self.ns,
-                        )
-                        if vlan_text.text is not None
-                    }
+                    vlan_text.text
+                    for vlan_text in intf.xpath(
+                        ".//ext:subinterface-encapsulation//ext:config/ext:outer-vlan-id | .//ext:subinterface-encapsulation//ext:config/ext:inner-vlan-id",
+                        namespaces=self.ns,
+                    )
+                    if vlan_text.text is not None
+                }
 
                 if vlan_ids:
                     trunk_vlans = trunk_vlans_by_parent.setdefault(parent_name, [])
@@ -562,7 +565,10 @@ class OcnosConfigXMLParser:
                     parent_interface = interfaces_by_name.get(parent_name)
                     if parent_interface is not None:
                         parent_interface.trunk_vlans = trunk_vlans
-                        if parent_interface.mode != "routed" and parent_interface.trunk_vlans:
+                        if (
+                            parent_interface.mode != "routed"
+                            and parent_interface.trunk_vlans
+                        ):
                             parent_interface.mode = "trunk"
                     continue
 
@@ -631,7 +637,7 @@ class OcnosConfigXMLParser:
             if not intf_name:
                 # fallback for name just incase
                 intf_name = intf.findtext("oc:config/oc:name", namespaces=self.ns)
-            
+
             if not intf_name or "." not in intf_name:
                 continue
 
@@ -649,7 +655,7 @@ class OcnosConfigXMLParser:
                 continue
 
             vlan_id = int(vlan_name)
-    
+
             if f"{vlan_id}:{intf_description}" in seen_vlan_names:
                 print(f"{vlan_id}:{intf_description} has been seen before")
                 continue
@@ -744,7 +750,9 @@ class OcnosConfigXMLParser:
             if evpn_system_mac:
                 system_mac_by_lag[evpn_name] = evpn_system_mac
 
-        for intf in self.config.iterfind(".//oc:interfaces/oc:interface", namespaces=self.ns):
+        for intf in self.config.iterfind(
+            ".//oc:interfaces/oc:interface", namespaces=self.ns
+        ):
             intf_name = intf.findtext("oc:name", namespaces=self.ns)
 
             if not intf_name:
@@ -756,13 +764,13 @@ class OcnosConfigXMLParser:
             if "." in intf_name:
                 parent_name = intf_name.split(".", 1)[0]
                 vlan_ids = {
-                        vlan_text.text
-                        for vlan_text in intf.xpath(
-                            ".//ext:subinterface-encapsulation//ext:config/ext:outer-vlan-id | .//ext:subinterface-encapsulation//ext:config/ext:inner-vlan-id",
-                            namespaces=self.ns,
-                        )
-                        if vlan_text.text is not None
-                    }
+                    vlan_text.text
+                    for vlan_text in intf.xpath(
+                        ".//ext:subinterface-encapsulation//ext:config/ext:outer-vlan-id | .//ext:subinterface-encapsulation//ext:config/ext:inner-vlan-id",
+                        namespaces=self.ns,
+                    )
+                    if vlan_text.text is not None
+                }
 
                 if vlan_ids:
                     trunk_vlans = trunk_vlans_by_parent.setdefault(parent_name, [])
@@ -771,7 +779,7 @@ class OcnosConfigXMLParser:
                         if vlan_id not in existing:
                             trunk_vlans.append(Vlan(vlan_id=vlan_id, s_tag=None))
                             existing.add(vlan_id)
-                    
+
                     # update the parent so the data is not lost
                     parent_lag = lag_interfaces_by_name.get(parent_name)
                     if parent_lag is not None:
@@ -792,13 +800,15 @@ class OcnosConfigXMLParser:
 
                 #  po anmed by aggregate-id.
                 lag_name = f"po{aggregate_id}"
-                members_by_lag.setdefault(lag_name, []).append(Interface(name=intf_name))
+                members_by_lag.setdefault(lag_name, []).append(
+                    Interface(name=intf_name)
+                )
 
                 lacp_mode = intf.findtext(
                     "agg:member-aggregation/agg:config/agg:lacp-mode",
                     namespaces=self.ns,
                 )
-        
+
                 if not lacp_mode:
                     raise ValueError("No LACP mode configured")
 
@@ -848,9 +858,8 @@ class OcnosConfigXMLParser:
                 access_vlan=lag_access_vlan,
                 trunk_vlans=trunk_vlans,
                 members=members_by_lag.get(lag_name, []),
-                system_mac=system_mac_by_lag.get(
-                    lag_name
-                ) or intf.findtext("oc:config/oc:system-mac", namespaces=self.ns),
+                system_mac=system_mac_by_lag.get(lag_name)
+                or intf.findtext("oc:config/oc:system-mac", namespaces=self.ns),
             )
 
         for lag_name, lag_interface in lag_interfaces_by_name.items():
@@ -970,11 +979,11 @@ class OcnosConfigXMLParser:
         network_instances = self.parse_network_instances()
         evpns = self.parse_evpns()
         asn = self.parse_asn()
-        return {
-            "interfaces": interfaces,
-            "lags": lags,
-            "vlans": vlans,
-            "network_instances": network_instances,
-            "evpns": evpns,
-            "asn": asn,
-        }
+        return Config(
+            interfaces=interfaces,
+            lags=lags,
+            vlans=vlans,
+            vrfs=network_instances,
+            evpns=evpns,
+            asn=asn,
+        )

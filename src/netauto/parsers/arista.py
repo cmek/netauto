@@ -2,7 +2,7 @@ import re
 import json
 from pathlib import Path
 from typing import Any, Pattern
-from netauto.models import Asn, Evpn, Interface, Lag, RoutingInstance, Vlan
+from netauto.models import Config, Asn, Evpn, Interface, Lag, RoutingInstance, Vlan
 
 
 class AristaConfigParser:
@@ -299,7 +299,7 @@ class AristaConfigParser:
             if trunk_match:
                 for vlan_id in self._parse_id_list(trunk_match.group(1)):
                     trunk_vlans.append(Vlan(vlan_id=vlan_id))  # pyright: ignore[reportCallIssue]
-    
+
             for vlan_id in subinterface_vlans.get(lag_name, []):
                 if not any(existing.vlan_id == vlan_id for existing in trunk_vlans):
                     trunk_vlans.append(Vlan(vlan_id=vlan_id))  # pyright: ignore[reportCallIssue]
@@ -497,11 +497,11 @@ class AristaConfigParser:
         evpns = self.parse_evpns(interface_data, vlans, config_parts)
         asn = self.parse_asn()
 
-        return {
-            "interfaces": interfaces,
-            "lags": lags,
-            "vlans": vlans,
-            "network_instances": network_instances,
-            "evpns": evpns,
-            "asn": asn,
-        }
+        return Config(
+            interfaces=interfaces,
+            lags=lags,
+            vlans=vlans,
+            vrfs=network_instances,
+            evpns=evpns,
+            asn=asn,
+        )
