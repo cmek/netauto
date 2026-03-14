@@ -29,12 +29,12 @@ def main() -> int:
     for config_file in files:
         print(f"Results for: {config_file.name}")
         parser = AristaConfigParser(config_file)
-        config_data = parser.parse_arista_config()
-        print(f"  parsed interfaces: {len(config_data['interfaces'])}")
-        print(f"  parsed lags: {len(config_data['lags'])}")
-        print(f"  parsed vlans: {len(config_data['vlans'])}")
-        print(f"  parsed network_instances: {len(config_data['network_instances'])}")
-        print(f"  parsed evpns: {len(config_data['evpns'])}")
+        config_data = parser.parse_config()
+        print(f"  parsed interfaces: {len(config_data.interfaces)}")
+        print(f"  parsed lags: {len(config_data.lags)}")
+        print(f"  parsed vlans: {len(config_data.vlans)}")
+        print(f"  parsed network_instances: {len(config_data.network_instances)}")
+        print(f"  parsed evpns: {len(config_data.evpns)}")
 
         folder_name = config_file.name.removesuffix(".config.txt")
         output_dir = output_path / folder_name

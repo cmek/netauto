@@ -457,7 +457,7 @@ class OcnosConfigParser:
         except ValueError:
             return None
 
-    def parse_ocnos_config(self) -> dict[str, Any]:
+    def parse_config(self) -> dict[str, Any]:
         config_parts = [
             entry.strip("\n") for entry in re.split(r"^!", self.config, flags=re.M)
         ]
@@ -972,7 +972,7 @@ class OcnosConfigXMLParser:
 
         return None
 
-    def parse_ocnos_config(self) -> dict[str, Any]:
+    def parse_config(self) -> dict[str, Any]:
         interfaces = self.parse_interfaces()
         lags = self.parse_lags()
         vlans = self.parse_vlans()
