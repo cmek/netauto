@@ -1,10 +1,11 @@
 [project]
 name = "netauto"
-version = "0.1.4"
+version = "0.1.5"
 description = "Add your description here"
 readme = "README.md"
 authors = [
-    { name = "Szymon Roczniak", email = "simon@dischaos.com" }
+    { name = "Szymon Roczniak", email = "simon@dischaos.com" },
+    { name = "Lee Starrs", email = "leestarrs@gmail.com" }
 ]
 requires-python = ">=3.12"
 dependencies = [
