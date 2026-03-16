@@ -50,6 +50,7 @@ class OcnosDeviceRenderer(DeviceRenderer):
         interface: Interface | Lag,
         port_channel_id: int | None = None,
         lacp_mode: str | None = None,
+
         create_parent_agg: bool = False,
         skip_interfaces=False,
     ) -> ET.Element:
@@ -527,7 +528,7 @@ class OcnosDeviceRenderer(DeviceRenderer):
         return root
 
     # mostly helpers due to exclusivity between evpn mpls and vxlan stuff
-    def render_vxlan_global(self) -> str:
+    def render_vxlan_enable(self) -> str:
         config = self._config_root()
         config = self._append_vxlan_global(config, delete=False)
         return self._tostring(config)
