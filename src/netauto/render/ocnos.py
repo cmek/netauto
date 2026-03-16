@@ -88,13 +88,20 @@ class OcnosDeviceRenderer(DeviceRenderer):
         """Render interface configuration commands for the given platform."""
         pass
 
-    def render_lag(self, lag: Lag) -> List[str]:
+    def render_lag(
+        self, lag: Lag, create_parent_agg: bool = False
+    ) -> List[str]:
         """Render LAG configuration commands for the given platform."""
         port_channel_id = int(lag.name.replace("po", ""))
 
         config = self._config_root()
         interfaces = ET.SubElement(config, self._tag("if", "interfaces"))
-        interfaces = self._append_interface(interfaces, lag, skip_interfaces=True)
+        interfaces = self._append_interface(
+            interfaces,
+            lag,
+            create_parent_agg=create_parent_agg,
+            skip_interfaces=True,
+        )
         for member in lag.members:
             interfaces = self._append_interface(
                 interfaces,
@@ -288,6 +295,28 @@ class OcnosDeviceRenderer(DeviceRenderer):
         config = self._append_evpn_mpls_tenant(config, evpn)
         return self._tostring(config)
 
+    # mostly helpers due to exclusivity between evpn mpls and vxlan stuff
+    def _append_evpn_mpls_global(self, root: ET.Element, *, delete: bool = False) -> ET.Element:
+        evpn_mpls = ET.SubElement(root, self._tag("evpnmpls", "evpn-mpls"))
+        global_cfg = ET.SubElement(evpn_mpls, self._tag("evpnmpls", "global"))
+        global_cfg_config = ET.SubElement(global_cfg, self._tag("evpnmpls", "config"))
+        enable_node = ET.SubElement(global_cfg_config, self._tag("evpnmpls", "enable-evpn-mpls"))
+        if delete:
+            enable_node.set(self._tag("nc", "operation"), "delete")
+        return root
+
+    # mostly helpers due to exclusivity between evpn mpls and vxlan stuff
+    def render_evpn_mpls_enable(self) -> str:
+        config = self._config_root()
+        config = self._append_evpn_mpls_global(config, delete=False)
+        return self._tostring(config)
+
+    # mostly helpers due to exclusivity between evpn mpls and vxlan stuff
+    def render_evpn_mpls_disable(self) -> str:
+        config = self._config_root()
+        config = self._append_evpn_mpls_global(config, delete=True)
+        return self._tostring(config)
+
     def _append_evpn_mpls_tenant_delete(
         self, root: ET.Element, evpn: Evpn
     ) -> ET.Element:
@@ -458,6 +487,28 @@ class OcnosDeviceRenderer(DeviceRenderer):
         config = self._config_root()
         config = self._append_vlan_delete(config, interface, vlan)
 
+        return self._tostring(config)
+
+    # mostly helpers due to exclusivity between evpn mpls and vxlan stuff
+    def _append_vxlan_global(self, root: ET.Element, *, delete: bool = False) -> ET.Element:
+        vxlan = ET.SubElement(root, self._tag("vxlan", "vxlan"))
+        global_cfg = ET.SubElement(vxlan, self._tag("vxlan", "global"))
+        config = ET.SubElement(global_cfg, self._tag("vxlan", "config"))
+        enable_node = ET.SubElement(config, self._tag("vxlan", "enable-vxlan"))
+        if delete:
+            enable_node.set(self._tag("nc", "operation"), "delete")
+        return root
+
+    # mostly helpers due to exclusivity between evpn mpls and vxlan stuff
+    def render_vxlan_enable(self) -> str:
+        config = self._config_root()
+        config = self._append_vxlan_global(config, delete=False)
+        return self._tostring(config)
+
+    # mostly helpers due to exclusivity between evpn mpls and vxlan stuff
+    def render_vxlan_disable(self) -> str:
+        config = self._config_root()
+        config = self._append_vxlan_global(config, delete=True)
         return self._tostring(config)
 
     def _append_vrf(
