@@ -50,6 +50,7 @@ class OcnosDeviceRenderer(DeviceRenderer):
         interface: Interface | Lag,
         port_channel_id: int | None = None,
         lacp_mode: str | None = None,
+        create_parent_agg: bool = False,
         skip_interfaces=False,
     ) -> ET.Element:
         if not skip_interfaces:
@@ -60,11 +61,23 @@ class OcnosDeviceRenderer(DeviceRenderer):
         ET.SubElement(intf, self._tag("if", "name")).text = interface.name
         intf_config = ET.SubElement(intf, self._tag("if", "config"))
         ET.SubElement(intf_config, self._tag("if", "mtu")).text = str(interface.mtu)
+        if create_parent_agg and isinstance(interface, Lag):
+            ET.SubElement(intf_config, self._tag("if", "name")).text = interface.name
         ET.SubElement(
             intf_config, self._tag("if", "description")
         ).text = interface.description
         if isinstance(interface, Lag):
             ET.SubElement(intf_config, self._tag("if", "enable-switchport"))
+
+            # Mainly because i deleted the whole agg in a delete and needed to remake it.
+            if create_parent_agg and interface.min_links > 1:
+                aggregator = ET.SubElement(intf, self._tag("ifagg", "aggregator"))
+                aggregator_config = ET.SubElement(
+                    aggregator, self._tag("ifagg", "config")
+                )
+                ET.SubElement(
+                    aggregator_config, self._tag("ifagg", "min-links")
+                ).text = str(interface.min_links)
 
         if port_channel_id is not None:
             agg = ET.SubElement(intf, self._tag("ifagg", "member-aggregation"))
@@ -103,12 +116,26 @@ class OcnosDeviceRenderer(DeviceRenderer):
             skip_interfaces=True,
         )
         for member in lag.members:
-            interfaces = self._append_interface(
+            self._append_interface(
                 interfaces,
                 member,
-                port_channel_id=port_channel_id,
-                lacp_mode=lag.lacp_mode,
                 skip_interfaces=True,
+            )
+            # Add extra lag stuff here for some consistency
+            intf = interfaces.find(
+                f"./if:interface[if:name='{member.name}']",
+                self.NS,
+            )
+            if intf is None:
+                continue
+            agg = ET.SubElement(intf, self._tag("ifagg", "member-aggregation"))
+            agg_config = ET.SubElement(agg, self._tag("ifagg", "config"))
+            ET.SubElement(agg_config, self._tag("ifagg", "agg-type")).text = "lacp"
+            ET.SubElement(agg_config, self._tag("ifagg", "aggregate-id")).text = str(
+                port_channel_id
+            )
+            ET.SubElement(agg_config, self._tag("ifagg", "lacp-mode")).text = (
+                lag.lacp_mode
             )
 
         return self._tostring(config)
@@ -500,7 +527,7 @@ class OcnosDeviceRenderer(DeviceRenderer):
         return root
 
     # mostly helpers due to exclusivity between evpn mpls and vxlan stuff
-    def render_vxlan_enable(self) -> str:
+    def render_vxlan_global(self) -> str:
         config = self._config_root()
         config = self._append_vxlan_global(config, delete=False)
         return self._tostring(config)
