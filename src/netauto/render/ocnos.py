@@ -117,18 +117,10 @@ class OcnosDeviceRenderer(DeviceRenderer):
             skip_interfaces=True,
         )
         for member in lag.members:
-            self._append_interface(
-                interfaces,
-                member,
-                skip_interfaces=True,
-            )
             # Add extra lag stuff here for some consistency
-            intf = interfaces.find(
-                f"./if:interface[if:name='{member.name}']",
-                self.NS,
-            )
-            if intf is None:
-                continue
+            intf = interfaces.find
+            intf = ET.SubElement(interfaces, self._tag("if", "interface"))
+            ET.SubElement(intf, self._tag("if", "name")).text = member.name
             agg = ET.SubElement(intf, self._tag("ifagg", "member-aggregation"))
             agg_config = ET.SubElement(agg, self._tag("ifagg", "config"))
             ET.SubElement(agg_config, self._tag("ifagg", "agg-type")).text = "lacp"
