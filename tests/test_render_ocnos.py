@@ -1,6 +1,6 @@
 import pytest
 from netauto.render.ocnos import OcnosDeviceRenderer
-from netauto.models import Evpn, Vlan, Interface, Lag
+from netauto.models import Evpn, Vlan, Interface, Lag, RoutingInstance, Asn
 
 
 class TestOcnosDeviceRenderer:
@@ -175,6 +175,83 @@ class TestOcnosDeviceRenderer:
 """
         )
 
+    def test_render_routing_instance(self):
+        """Test rendering routing instance config"""
+        service_order="SO9999"
+        xml = self.renderer.render_routing_instance(
+            asn=Asn(asn="65511"),
+            vrf=RoutingInstance(
+                instance_name=service_order,
+                instance_type="mac-vrf",
+                rd=f"65511:{service_order[2:]}",
+                rt_rd=f"35551:{service_order[2:]}",
+            ),
+
+        )
+        assert (
+            xml
+            == """<?xml version="1.0" ?>
+<config xmlns:bgpvrf="http://www.ipinfusion.com/yang/ocnos/ipi-bgp-vrf" xmlns:netinst="http://www.ipinfusion.com/yang/ocnos/ipi-network-instance" xmlns:vrf="http://www.ipinfusion.com/yang/ocnos/ipi-vrf">
+  <netinst:network-instances>
+    <netinst:network-instance>
+      <netinst:instance-name>SO9999</netinst:instance-name>
+      <netinst:instance-type>mac-vrf</netinst:instance-type>
+      <netinst:config>
+        <netinst:instance-name>SO9999</netinst:instance-name>
+        <netinst:instance-type>mac-vrf</netinst:instance-type>
+      </netinst:config>
+      <vrf:vrf>
+        <vrf:config>
+          <vrf:vrf-name>SO9999</vrf:vrf-name>
+        </vrf:config>
+        <bgpvrf:bgp-vrf>
+          <bgpvrf:config>
+            <bgpvrf:rd-string>65511:9999</bgpvrf:rd-string>
+          </bgpvrf:config>
+          <bgpvrf:route-targets>
+            <bgpvrf:route-target>
+              <bgpvrf:rt-rd-string>35551:9999</bgpvrf:rt-rd-string>
+              <bgpvrf:config>
+                <bgpvrf:rt-rd-string>35551:9999</bgpvrf:rt-rd-string>
+                <bgpvrf:direction>import export</bgpvrf:direction>
+              </bgpvrf:config>
+            </bgpvrf:route-target>
+          </bgpvrf:route-targets>
+        </bgpvrf:bgp-vrf>
+      </vrf:vrf>
+    </netinst:network-instance>
+  </netinst:network-instances>
+</config>
+"""
+        )
+
+    def test_render_routing_instance_delete(self):
+        """Test rendering routing instance config"""
+        service_order="SO9999"
+        xml = self.renderer.render_routing_instance_delete(
+            asn=Asn(asn="65511"),
+            vrf=RoutingInstance(
+                instance_name=service_order,
+                instance_type="mac-vrf",
+                rd=f"65511:{service_order[2:]}",
+                rt_rd=f"35551:{service_order[2:]}",
+            ),
+
+        )
+        assert (
+            xml
+            == """<?xml version="1.0" ?>
+<config xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0" xmlns:netinst="http://www.ipinfusion.com/yang/ocnos/ipi-network-instance">
+  <netinst:network-instances>
+    <netinst:network-instance nc:operation="delete">
+      <netinst:instance-name>SO9999</netinst:instance-name>
+      <netinst:instance-type>mac-vrf</netinst:instance-type>
+    </netinst:network-instance>
+  </netinst:network-instances>
+</config>
+"""
+        )
+
     def test_render_evpn(self):
         """Test rendering evpn config"""
         xml = self.renderer.render_evpn(
@@ -190,43 +267,14 @@ class TestOcnosDeviceRenderer:
                     s_tag=None,
                 ),
                 asn=65511,
-                vni=5011,
+                vni=99991,
                 description="SO9999",
             ),
         )
         assert (
             xml
             == """<?xml version="1.0" ?>
-<config xmlns:bgpvrf="http://www.ipinfusion.com/yang/ocnos/ipi-bgp-vrf" xmlns:if="http://www.ipinfusion.com/yang/ocnos/ipi-interface" xmlns:ifext="http://www.ipinfusion.com/yang/ocnos/ipi-if-extended" xmlns:netinst="http://www.ipinfusion.com/yang/ocnos/ipi-network-instance" xmlns:vrf="http://www.ipinfusion.com/yang/ocnos/ipi-vrf">
-  <netinst:network-instances>
-    <netinst:network-instance>
-      <netinst:instance-name>SO9999</netinst:instance-name>
-      <netinst:instance-type>mac-vrf</netinst:instance-type>
-      <netinst:config>
-        <netinst:instance-name>SO9999</netinst:instance-name>
-        <netinst:instance-type>mac-vrf</netinst:instance-type>
-      </netinst:config>
-      <vrf:vrf>
-        <vrf:config>
-          <vrf:vrf-name>SO9999</vrf:vrf-name>
-        </vrf:config>
-        <bgpvrf:bgp-vrf>
-          <bgpvrf:config>
-            <bgpvrf:rd-string>65511:5011</bgpvrf:rd-string>
-          </bgpvrf:config>
-          <bgpvrf:route-targets>
-            <bgpvrf:route-target>
-              <bgpvrf:rt-rd-string>65511:5011</bgpvrf:rt-rd-string>
-              <bgpvrf:config>
-                <bgpvrf:rt-rd-string>65511:5011</bgpvrf:rt-rd-string>
-                <bgpvrf:direction>import export</bgpvrf:direction>
-              </bgpvrf:config>
-            </bgpvrf:route-target>
-          </bgpvrf:route-targets>
-        </bgpvrf:bgp-vrf>
-      </vrf:vrf>
-    </netinst:network-instance>
-  </netinst:network-instances>
+<config xmlns:ethvpn="http://www.ipinfusion.com/yang/ocnos/ipi-ethernet-vpn" xmlns:if="http://www.ipinfusion.com/yang/ocnos/ipi-interface" xmlns:ifext="http://www.ipinfusion.com/yang/ocnos/ipi-if-extended" xmlns:vxlan="http://www.ipinfusion.com/yang/ocnos/ipi-vxlan">
   <if:interfaces>
     <if:interface>
       <if:name>eth3.30</if:name>
@@ -257,6 +305,37 @@ class TestOcnosDeviceRenderer:
       </ifext:extended>
     </if:interface>
   </if:interfaces>
+  <ethvpn:evpn>
+    <ethvpn:interfaces>
+      <ethvpn:interface>
+        <ethvpn:name>eth3.30</ethvpn:name>
+        <ethvpn:config>
+          <ethvpn:name>eth3.30</ethvpn:name>
+        </ethvpn:config>
+        <ethvpn:access-interfaces>
+          <ethvpn:access-interface>
+            <ethvpn:access-if>access-if-evpn</ethvpn:access-if>
+            <ethvpn:config>
+              <ethvpn:access-if>access-if-evpn</ethvpn:access-if>
+              <ethvpn:evpn-identifier>99991</ethvpn:evpn-identifier>
+            </ethvpn:config>
+          </ethvpn:access-interface>
+        </ethvpn:access-interfaces>
+      </ethvpn:interface>
+    </ethvpn:interfaces>
+  </ethvpn:evpn>
+  <vxlan:vxlan>
+    <vxlan:vxlan-tenants>
+      <vxlan:vxlan-tenant>
+        <vxlan:vxlan-identifier>99991</vxlan:vxlan-identifier>
+        <vxlan:config>
+          <vxlan:vxlan-identifier>99991</vxlan:vxlan-identifier>
+          <vxlan:tenant-type>ingress-replication</vxlan:tenant-type>
+          <vxlan:vrf-name>SO9999</vxlan:vrf-name>
+        </vxlan:config>
+      </vxlan:vxlan-tenant>
+    </vxlan:vxlan-tenants>
+  </vxlan:vxlan>
 </config>
 """
         )
@@ -276,44 +355,33 @@ class TestOcnosDeviceRenderer:
                     s_tag=None,
                 ),
                 asn=65511,
-                vni=5011,
+                vni=99991,
                 description="SO9999",
             ),
         )
         assert (
             xml
             == """<?xml version="1.0" ?>
-<config xmlns:bgpvrf="http://www.ipinfusion.com/yang/ocnos/ipi-bgp-vrf" xmlns:if="http://www.ipinfusion.com/yang/ocnos/ipi-interface" xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0" xmlns:netinst="http://www.ipinfusion.com/yang/ocnos/ipi-network-instance" xmlns:vrf="http://www.ipinfusion.com/yang/ocnos/ipi-vrf">
-  <netinst:network-instances>
-    <netinst:network-instance nc:operation="delete">
-      <netinst:instance-name>SO9999</netinst:instance-name>
-      <netinst:instance-type>mac-vrf</netinst:instance-type>
-      <vrf:vrf nc:operation="delete">
-        <vrf:config>
-          <vrf:vrf-name>SO9999</vrf:vrf-name>
-        </vrf:config>
-        <bgpvrf:bgp-vrf nc:operation="delete">
-          <bgpvrf:config>
-            <bgpvrf:rd-string>65511:5011</bgpvrf:rd-string>
-          </bgpvrf:config>
-          <bgpvrf:route-targets>
-            <bgpvrf:route-target nc:operation="delete">
-              <bgpvrf:rt-rd-string>65511:5011</bgpvrf:rt-rd-string>
-              <bgpvrf:config>
-                <bgpvrf:rt-rd-string>65511:5011</bgpvrf:rt-rd-string>
-                <bgpvrf:direction>import export</bgpvrf:direction>
-              </bgpvrf:config>
-            </bgpvrf:route-target>
-          </bgpvrf:route-targets>
-        </bgpvrf:bgp-vrf>
-      </vrf:vrf>
-    </netinst:network-instance>
-  </netinst:network-instances>
+<config xmlns:ethvpn="http://www.ipinfusion.com/yang/ocnos/ipi-ethernet-vpn" xmlns:if="http://www.ipinfusion.com/yang/ocnos/ipi-interface" xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0" xmlns:vxlan="http://www.ipinfusion.com/yang/ocnos/ipi-vxlan">
   <if:interfaces>
     <if:interface nc:operation="delete">
       <if:name>eth3.30</if:name>
     </if:interface>
   </if:interfaces>
+  <ethvpn:evpn>
+    <ethvpn:interfaces>
+      <ethvpn:interface nc:operation="delete">
+        <ethvpn:name>eth3.30</ethvpn:name>
+      </ethvpn:interface>
+    </ethvpn:interfaces>
+  </ethvpn:evpn>
+  <vxlan:vxlan>
+    <vxlan:vxlan-tenants>
+      <vxlan:vxlan-tenant nc:operation="delete">
+        <vxlan:vxlan-identifier>99991</vxlan:vxlan-identifier>
+      </vxlan:vxlan-tenant>
+    </vxlan:vxlan-tenants>
+  </vxlan:vxlan>
 </config>
 """
         )
