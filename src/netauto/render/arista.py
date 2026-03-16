@@ -34,7 +34,14 @@ class AristaDeviceRenderer(DeviceRenderer):
         return [line for line in rendered.split("\n") if line.strip()]
 
     def render_lag_delete(self, lag: Lag) -> List[str]:
-        pass
+        template_path = f"arista_eos/lag_delete.j2"
+        template = self.env.get_template(template_path)
+        rendered = template.render(
+            lag=lag,
+            lag_name=lag.name,
+            members=[member.name for member in lag.members],
+        )
+        return [line for line in rendered.split("\n") if line.strip()]
 
     def render_evpn(self, interface: Interface, evpn: Evpn) -> List[str]:
         """Render EVPN service configuration."""
