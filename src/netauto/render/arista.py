@@ -2,7 +2,7 @@ from .base import DeviceRenderer
 from jinja2 import Environment, PackageLoader, select_autoescape
 from typing import List
 from pathlib import Path
-from netauto.models import Interface, Lag, Evpn, Vlan
+from netauto.models import Interface, Lag, Evpn, Vlan, RoutingInstance, Asn
 
 
 class AristaDeviceRenderer(DeviceRenderer):
@@ -62,4 +62,10 @@ class AristaDeviceRenderer(DeviceRenderer):
         template_path = f"arista_eos/vlan_delete.j2"
         template = self.env.get_template(template_path)
         rendered = template.render(interface=interface, vlan=vlan)
+        return [line for line in rendered.split("\n") if line.strip()]
+
+    def render_routing_instance(self, asn: Asn, vrf: RoutingInstance) -> List[str]:
+        template_path = f"arista_eos/vrf.j2"
+        template = self.env.get_template(template_path)
+        rendered = template.render(asn=asn, vrf=vrf)
         return [line for line in rendered.split("\n") if line.strip()]

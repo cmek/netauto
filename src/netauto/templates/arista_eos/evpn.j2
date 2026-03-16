@@ -21,13 +21,9 @@ interface Vxlan1
    vxlan vlan {{ vlan.vlan_id }} vni {{ evpn.vni }}
 {% endif %}
 router bgp {{ evpn.asn }}
-   vlan-aware-bundle {{ evpn.vni }}
+   vlan-aware-bundle {{ evpn.description }}
 {% if vlan.s_tag %}
       vlan add {{ vlan.s_tag }}
 {% else %}
-      rd {{ evpn.asn }}:{{ evpn.vni }}
-      route-target both {{ evpn.asn }}:{{ evpn.vni }}
-      redistribute learned
-      redistribute static
-      vlan {{ vlan.vlan_id }}
+      vlan add {{ vlan.vlan_id }}
 {% endif %}

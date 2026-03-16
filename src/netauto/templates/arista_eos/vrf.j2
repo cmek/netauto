@@ -1,0 +1,6 @@
+router bgp {{ asn.asn }}
+   vlan-aware-bundle {{ vrf.instance_name }}
+      rd {{ vrf.rd }}
+      route-target both {{ vrf.rt_rd }}
+      redistribute learned
+      redistribute static
