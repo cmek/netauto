@@ -480,7 +480,7 @@ class AristaConfigParser:
 
         return evpns
 
-    def parse_config(self) -> dict[str, Any]:
+    def parse_config(self) -> Config:
         config_parts = [
             entry.strip("\n") for entry in re.split(r"^!", self.config, flags=re.M)
         ]
