@@ -69,3 +69,11 @@ class AristaDeviceRenderer(DeviceRenderer):
         template = self.env.get_template(template_path)
         rendered = template.render(asn=asn, vrf=vrf)
         return [line for line in rendered.split("\n") if line.strip()]
+
+    def render_routing_instance_delete(
+        self, asn: Asn, vrf: RoutingInstance
+    ) -> List[str]:
+        template_path = f"arista_eos/vrf_delete.j2"
+        template = self.env.get_template(template_path)
+        rendered = template.render(asn=asn, vrf=vrf)
+        return [line for line in rendered.split("\n") if line.strip()]
