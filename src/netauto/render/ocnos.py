@@ -642,7 +642,6 @@ class OcnosDeviceRenderer(DeviceRenderer):
             return self._tostring(root)
 
         config = self._config_root()
-        # config = self._append_vrf(config, evpn)
         config = self._append_vlan(
             config,
             interface,
