@@ -954,7 +954,8 @@ class OcnosConfigXMLParser:
 
     def parse_asn(self) -> Asn | None:
         for bgp_instance in self.config.iterfind(
-            ".//bgp_core:bgp/bgp_core:bgp-instance", namespaces=self.ns
+            ".//bgp_core:bgp-instance",
+            namespaces=self.ns,
         ):
             bgp_as = bgp_instance.findtext("bgp_core:bgp-as", namespaces=self.ns)
             if not bgp_as:
@@ -970,7 +971,14 @@ class OcnosConfigXMLParser:
             except ValueError:
                 continue
 
-        return None
+        bgp_as = self.config.findtext(".//bgp_core:bgp-as", namespaces=self.ns)
+        if bgp_as is None or not bgp_as.strip():
+            return None
+
+        try:
+            return Asn(asn=int(bgp_as))
+        except ValueError:
+            return None
 
     def parse_config(self) -> dict[str, Any]:
         interfaces = self.parse_interfaces()
