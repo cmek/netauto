@@ -177,7 +177,7 @@ class TestOcnosDeviceRenderer:
 
     def test_render_routing_instance(self):
         """Test rendering routing instance config"""
-        service_order="SO9999"
+        service_order = "SO9999"
         xml = self.renderer.render_routing_instance(
             asn=Asn(asn="65511"),
             vrf=RoutingInstance(
@@ -186,7 +186,6 @@ class TestOcnosDeviceRenderer:
                 rd=f"65511:{service_order[2:]}",
                 rt_rd=f"35551:{service_order[2:]}",
             ),
-
         )
         assert (
             xml
@@ -227,7 +226,7 @@ class TestOcnosDeviceRenderer:
 
     def test_render_routing_instance_delete(self):
         """Test rendering routing instance config"""
-        service_order="SO9999"
+        service_order = "SO9999"
         xml = self.renderer.render_routing_instance_delete(
             asn=Asn(asn="65511"),
             vrf=RoutingInstance(
@@ -236,7 +235,6 @@ class TestOcnosDeviceRenderer:
                 rd=f"65511:{service_order[2:]}",
                 rt_rd=f"35551:{service_order[2:]}",
             ),
-
         )
         assert (
             xml
