@@ -9,6 +9,7 @@ from ncclient.operations import RPCError
 from ncclient.operations.retrieve import GetReply
 from netauto.models import Interface, Vlan, Lag, Evpn, RoutingInstance
 from netauto.render import OcnosDeviceRenderer
+from netmiko import ConnectHandler
 
 
 logger = logging.getLogger(__name__)
@@ -219,14 +220,24 @@ class OcnosDriver(DeviceDriver):
 
         return interfaces
 
-    def get_config(self) -> str:
+    def get_config(self, config_type: str = "running", format="xml") -> str:
         """
         Retrieves the whole config (running by default) via NETCONF.
         Returns the raw XML payload as a string, or "" on failure.
         """
         try:
-            reply = self.conn.get_config(source="running")
-            return reply.data_xml or ""
+            if format == "text":
+                # OCNOS doesn't support get-config in text format, so here's a workaround using the CLI via Netmiko
+                conn = ConnectHandler(
+                    device_type="ipinfusion_ocnos",
+                    host=self.connection_data["host"],
+                    username=self.connection_data["username"],
+                    password=self.connection_data["password"],
+                )
+                return conn.send_command(f"show {config_type}-config")
+            else:
+                reply = self.conn.get_config(source=config_type)
+                return reply.data_xml or ""
 
         except RPCError as e:
             # NETCONF server returned an <rpc-error>

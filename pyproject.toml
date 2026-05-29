@@ -1,6 +1,6 @@
 [project]
 name = "netauto"
-version = "0.1.5"
+version = "0.1.6"
 description = "Add your description here"
 readme = "README.md"
 authors = [
@@ -12,6 +12,7 @@ dependencies = [
     "jinja2>=3.1.6",
     "jsonrpclib>=0.2.1",
     "ncclient>=0.7.0",
+    "netmiko>=4.7.0",
     "paramiko>=4.0.0",
     "pydantic>=2.12.4",
     "pyeapi>=1.0.4",

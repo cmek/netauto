@@ -25,6 +25,10 @@ class DeviceDriver(ABC):
         pass
 
     @abstractmethod
+    def get_config(self, config_type: str ="running", format: str|None = None) -> str:
+        pass
+
+    @abstractmethod
     def get_interfaces(self) -> Dict[str, Interface]:
         """Returns a dictionary of interface name to Interface model."""
         pass

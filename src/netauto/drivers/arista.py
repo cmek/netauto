@@ -31,7 +31,7 @@ class AristaDriver(DeviceDriver):
     def connect(self):
         try:
             self.node = pyeapi.connect(
-                transport="http",
+                transport="https",
                 host=self.host,
                 username=self.user,
                 password=self.password,
@@ -47,7 +47,7 @@ class AristaDriver(DeviceDriver):
         # eAPI is stateless, nothing to close
         pass
 
-    def get_config(self, config_type: str = "running") -> str:
+    def get_config(self, config_type: str = "running", format=None) -> str:
         if config_type == "running":
             return self.node.running_config
         elif config_type == "startup":
