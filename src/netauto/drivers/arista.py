@@ -47,14 +47,19 @@ class AristaDriver(DeviceDriver):
         # eAPI is stateless, nothing to close
         pass
 
-    def get_config(self, config_type: str = "running", format=None) -> str:
-        if config_type == "running":
-            return self.node.running_config
-        elif config_type == "startup":
-            return self.node.startup_config
+    def get_config(self, config_type: str = "running", format: str = "text") -> str:
+        # we'll use the command output rather than node.running_config or startup_config properties
+        # becuse we don't need all the defaults included in the output
+
+        response = self.node.enable(f"show {config_type}-config", encoding=format)
+
+        if format == "json":
+            return response[0].get("result", {})
+        elif format == "text":
+            return response[0].get("result", {}).get("output", "")
         else:
             raise Exception(
-                f"Unknown config type {config_type}, allowed values are running or startup"
+                f"Unsupported format {format}, allowed values are json or text"
             )
 
     def get_interfaces(self) -> List[Interface | Lag]:
