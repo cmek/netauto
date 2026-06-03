@@ -28,10 +28,10 @@ class AristaDriver(DeviceDriver):
     def lag_prefix(self) -> str:
         return "Port-Channel"
 
-    def connect(self):
+    def connect(self, transport: str = "http"):
         try:
             self.node = pyeapi.connect(
-                transport="https",
+                transport=transport,
                 host=self.host,
                 username=self.user,
                 password=self.password,
