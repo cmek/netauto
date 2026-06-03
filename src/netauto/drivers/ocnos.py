@@ -27,7 +27,7 @@ OCNOS_NS: dict[str, str] = {
 
 
 class OcnosDriver(DeviceDriver):
-    def __init__(self, host: str, user: str, password: str | None = None) -> None:
+    def __init__(self, host: str, user: str, password: str | None = None, key_file: str = "~/.ssh/id_rsa") -> None:
         self.connection_data = {
             "host": host,
             "port": 830,
@@ -39,6 +39,7 @@ class OcnosDriver(DeviceDriver):
         }
         self.conn: Manager = self.connect()
         self.renderer = OcnosDeviceRenderer()
+        self.key_file = key_file
 
     @property
     def platform(self) -> str:
@@ -228,13 +229,17 @@ class OcnosDriver(DeviceDriver):
         try:
             if format == "text":
                 # OCNOS doesn't support get-config in text format, so here's a workaround using the CLI via Netmiko
-                conn = ConnectHandler(
-                    device_type="ipinfusion_ocnos",
-                    host=self.connection_data["host"],
-                    username=self.connection_data["username"],
-                    password=self.connection_data["password"],
-                )
-                return conn.send_command(f"show {config_type}-config")
+
+                conn_data = {
+                    'device_type': 'ipinfusion_ocnos',
+                    'host': self.connection_data['host'],
+                    'username': self.connection_data['username'],
+                    'use_keys': True,
+                    'key_file': self.key_file,
+                }
+                with ConnectHandler(**conn_data) as conn:
+                    config = conn.send_command(f"show {config_type}-config")
+                return config or ""
             else:
                 reply = self.conn.get_config(source=config_type)
                 return reply.data_xml or ""
