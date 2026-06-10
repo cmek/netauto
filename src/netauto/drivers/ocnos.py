@@ -417,6 +417,36 @@ class OcnosDriver(DeviceDriver):
             if isinstance(intf, Lag) and intf.system_mac
         ]
 
+    @staticmethod
+    def _extract_vnis(reply: GetReply) -> list[int]:
+        """Parse the configured VXLAN VNIs out of a vxlan subtree get-reply.
+
+        Split from get_vnis() so the parsing is unit-testable without a live
+        NETCONF session (see tests/test_drivers.py).
+        """
+        root: etree._Element | None = reply.data_ele
+        if root is None:
+            return []
+
+        vnis: set[int] = set()
+        for tenant in root.xpath(".//vxlan:vxlan-tenant", namespaces=OCNOS_NS):
+            tenant: etree._Element
+            # Use xpath (not findtext) — ElementPath rejects local-name()
+            # predicates. The tenant's direct vxlan-identifier child is the VNI.
+            vni_vals = tenant.xpath(
+                "./vxlan:vxlan-identifier/text()", namespaces=OCNOS_NS
+            )
+            if not vni_vals:
+                continue
+
+            vni_text = vni_vals[0].strip()
+            try:
+                vnis.add(int(vni_text))
+            except ValueError:
+                logger.debug("invalid vni: %r", vni_text)
+
+        return sorted(vnis)
+
     def get_vnis(self) -> list[int]:
         """
         Retrieves VNIs from OcNOS using Netconf.
@@ -433,30 +463,7 @@ class OcnosDriver(DeviceDriver):
         try:
             vxlan_filter: tuple[str, str] = ("subtree", vxlan_subtree)
             vxlan_reply: GetReply = self.conn.get(filter=vxlan_filter)
-
-            root: etree._Element | None = vxlan_reply.data_ele
-            if root is None:
-                return []
-
-            vnis: set[int] = set()
-
-            for tenant in root.xpath(".//vxlan:vxlan-tenant", namespaces=OCNOS_NS):
-                tenant: etree._Element
-                vni_text: str | None = tenant.findtext(
-                    ".//*[local-name()='vxlan-identifier']", None, namespaces=OCNOS_NS
-                )
-
-                if not vni_text:
-                    continue
-
-                vni_text = vni_text.strip()
-
-                try:
-                    vnis.add(int(vni_text))
-                except ValueError:
-                    logger.debug("invalid vni: %r", vni_text)
-
-            return sorted(vnis)
+            return self._extract_vnis(vxlan_reply)
 
         except Exception as e:  # i dont like this, revise it when ive got more data
             logger.exception("Failed to get VNIs: %s", e)

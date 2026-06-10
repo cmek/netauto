@@ -352,12 +352,6 @@ class TestOcnosDeviceRenderer:
       </if:config>
       <ifext:extended>
         <ifext:subinterface-encapsulation>
-          <ifext:rewrite>
-            <ifext:config>
-              <ifext:vlan-action>pop</ifext:vlan-action>
-              <ifext:enable-pop>1tag</ifext:enable-pop>
-            </ifext:config>
-          </ifext:rewrite>
           <ifext:single-tag-vlan-matches>
             <ifext:single-tag-vlan-match>
               <ifext:encapsulation-type>dot1q</ifext:encapsulation-type>
@@ -405,6 +399,30 @@ class TestOcnosDeviceRenderer:
 </config>
 """
         )
+
+    def test_render_evpn_uses_vni_verbatim(self):
+        """The VNI (allocated externally) is used as-is for the VXLAN tenant and
+        the access-if-evpn binding; the tenant vrf-name stays the service key.
+        The basic sub-interface carries no <rewrite> block. service_type does
+        not change the VNI."""
+        for service_type in ("cloud_vc", "p2p_vc"):
+            xml = self.renderer.render_evpn(
+                Interface(name="eth4", mtu=1500),
+                Evpn(
+                    vlan=Vlan(vlan_id=100, name="SO555"),
+                    asn=65001,
+                    vni=5000,
+                    description="SO555",
+                    service_type=service_type,
+                ),
+            )
+            assert "<vxlan:vxlan-identifier>5000</vxlan:vxlan-identifier>" in xml
+            assert "<ethvpn:evpn-identifier>5000</ethvpn:evpn-identifier>" in xml
+            # tenant vrf-name keeps the service key
+            assert "<vxlan:vrf-name>SO555</vxlan:vrf-name>" in xml
+            # basic single-tag circuit: no rewrite
+            assert "<ifext:rewrite>" not in xml
+            assert "<ifext:single-tag-vlan-matches>" in xml
 
     def test_render_evpn_delete(self):
         """Test rendering evpn config"""

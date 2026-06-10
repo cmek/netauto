@@ -1,10 +1,10 @@
 {# Arista EOS EVPN Service Delete Template #}
 {% set vlan = evpn.vlan %}
-interface {{ interface.name }}
-  switchport trunk allowed vlan remove {{ vlan.vlan_id }}
 router bgp {{ evpn.asn }}
-  no vlan {{ vlan.vlan_id }}
-  exit
+   vlan-aware-bundle {{ evpn.description }}
+      no vlan {{ vlan.vlan_id }}
 interface Vxlan1
-  no vxlan vlan {{ vlan.vlan_id }} vni {{ evpn.vni }}
-  exit
+   no vxlan vlan {{ vlan.vlan_id }} vni {{ evpn.vni }}
+interface {{ interface.name }}
+   switchport trunk allowed vlan remove {{ vlan.vlan_id }}
+no vlan {{ vlan.vlan_id }}

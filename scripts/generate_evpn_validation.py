@@ -1,0 +1,259 @@
+"""Generate example EVPN circuit configuration for every supported scenario.
+
+This renders the per-device building blocks (``EvpnManager``) offline via
+``MockDriver`` — no lab devices required — for the full matrix of non-Azure,
+global-transport circuits:
+
+  * ``p2p_vc``  (member A <-> member B): arista/arista, ocnos/ocnos, mixed
+  * ``cloud_vc`` (customer <-> CNI):     CNI on both Arista and OcNOS
+
+Each scenario is laid out as a complete circuit (both endpoints) with create and
+delete config, so the network engineering team can review what we will push
+before it ever touches live gear.
+
+Note (non-Azure scope): the CNI side is byte-identical to the customer side, and
+p2p customer_a == customer_b — per-endpoint rendering depends only on
+service_type x vendor. The customer/CNI and A/B labels are presentational here;
+they only diverge once Azure / QinQ lands.
+
+Usage:
+    python scripts/generate_evpn_validation.py        # writes validation_output/
+
+``generate_all()`` returns {relative_path: content} so the same matrix can be
+golden-file guarded in tests (see tests/test_evpn_validation_matrix.py).
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Dict, List
+
+from netauto.drivers import MockDriver
+from netauto.evpn import EvpnManager
+from netauto.models import Asn, Evpn, Interface, RoutingInstance, Vlan
+
+TERACO_ASN = 37195  # route-target prefix (from the ACXv2 reference templates)
+OUTPUT_DIRNAME = "validation_output"
+
+# Per-vendor presentation details.
+VENDORS = {
+    "arista_eos": {"label": "arista", "interface": "Ethernet6", "ext": "cfg", "syntax": "Arista EOS CLI"},
+    "ipinfusion_ocnos": {"label": "ocnos", "interface": "eth4", "ext": "xml", "syntax": "OcNOS NETCONF edit-config payload"},
+}
+
+
+# Each scenario is a complete circuit: a service identity + two endpoints.
+SCENARIOS = [
+    # ---- p2p_vc (member <-> member) ----
+    {
+        "name": "p2p_vc__arista_to_arista",
+        "service_type": "p2p_vc",
+        "service_key": "SO101010",
+        "vlan": 100,
+        "vni": 5000,
+        "endpoints": [
+            {"role": "customer_a", "vendor": "arista_eos", "asn": 65001},
+            {"role": "customer_b", "vendor": "arista_eos", "asn": 65002},
+        ],
+    },
+    {
+        "name": "p2p_vc__ocnos_to_ocnos",
+        "service_type": "p2p_vc",
+        "service_key": "SO101011",
+        "vlan": 101,
+        "vni": 5001,
+        "endpoints": [
+            {"role": "customer_a", "vendor": "ipinfusion_ocnos", "asn": 65001},
+            {"role": "customer_b", "vendor": "ipinfusion_ocnos", "asn": 65002},
+        ],
+    },
+    {
+        "name": "p2p_vc__arista_to_ocnos",
+        "service_type": "p2p_vc",
+        "service_key": "SO101012",
+        "vlan": 102,
+        "vni": 5002,
+        "endpoints": [
+            {"role": "customer_a", "vendor": "arista_eos", "asn": 65001},
+            {"role": "customer_b", "vendor": "ipinfusion_ocnos", "asn": 65002},
+        ],
+    },
+    # ---- cloud_vc (customer <-> CNI), CNI on both vendors ----
+    {
+        "name": "cloud_vc__cust-arista_cni-arista",
+        "service_type": "cloud_vc",
+        "service_key": "SO202020",
+        "vlan": 200,
+        "vni": 6000,
+        "endpoints": [
+            {"role": "customer", "vendor": "arista_eos", "asn": 65001},
+            {"role": "cni", "vendor": "arista_eos", "asn": 65010},
+        ],
+    },
+    {
+        "name": "cloud_vc__cust-arista_cni-ocnos",
+        "service_type": "cloud_vc",
+        "service_key": "SO202021",
+        "vlan": 201,
+        "vni": 6001,
+        "endpoints": [
+            {"role": "customer", "vendor": "arista_eos", "asn": 65001},
+            {"role": "cni", "vendor": "ipinfusion_ocnos", "asn": 65010},
+        ],
+    },
+    {
+        "name": "cloud_vc__cust-ocnos_cni-arista",
+        "service_type": "cloud_vc",
+        "service_key": "SO202022",
+        "vlan": 202,
+        "vni": 6002,
+        "endpoints": [
+            {"role": "customer", "vendor": "ipinfusion_ocnos", "asn": 65001},
+            {"role": "cni", "vendor": "arista_eos", "asn": 65010},
+        ],
+    },
+    {
+        "name": "cloud_vc__cust-ocnos_cni-ocnos",
+        "service_type": "cloud_vc",
+        "service_key": "SO202023",
+        "vlan": 203,
+        "vni": 6003,
+        "endpoints": [
+            {"role": "customer", "vendor": "ipinfusion_ocnos", "asn": 65001},
+            {"role": "cni", "vendor": "ipinfusion_ocnos", "asn": 65010},
+        ],
+    },
+]
+
+
+def _render_endpoint(scenario: dict, endpoint: dict) -> tuple[str, str]:
+    """Return (create_config, delete_config) for one endpoint, via EvpnManager."""
+    vendor = endpoint["vendor"]
+    interface = VENDORS[vendor]["interface"]
+    service_key = scenario["service_key"]
+    num = service_key[2:]
+
+    driver = MockDriver(
+        platform=vendor,
+        initial_interfaces=[Interface(name=interface)],
+        initial_switchports=[Interface(name=interface, mode="trunk")],
+    )
+    mgr = EvpnManager(driver)
+
+    evpn = Evpn(
+        vlan=Vlan(vlan_id=scenario["vlan"], name=service_key),
+        asn=endpoint["asn"],
+        vni=scenario["vni"],
+        description=service_key,
+        service_type=scenario["service_type"],
+    )
+    ri = RoutingInstance(
+        instance_name=service_key,
+        instance_type="mac-vrf",
+        rd=f"{endpoint['asn']}:{num}",  # RD is device-local
+        rt_rd=f"{TERACO_ASN}:{num}",    # RT is shared across the circuit
+    )
+
+    create = mgr.create_circuit(
+        interface, evpn, routing_instance=ri, asn=Asn(asn=endpoint["asn"]), dry_run=True
+    )
+    delete = mgr.delete_circuit(
+        interface, evpn, routing_instance=ri, asn=Asn(asn=endpoint["asn"]),
+        delete_vrf=True, dry_run=True,
+    )
+    return create, delete
+
+
+def _scenario_readme(scenario: dict, files: List[str]) -> str:
+    st = scenario["service_type"]
+    vni, vlan = scenario["vni"], scenario["vlan"]
+    lines = [
+        f"# {scenario['name']}",
+        "",
+        f"- Service type: **{st}**",
+        f"- Service key: `{scenario['service_key']}`",
+        f"- VLAN: `{vlan}`",
+        f"- VNI: `{vni}`  (allocated externally, used verbatim for the VXLAN id"
+        " and the mac-vrf / vlan-aware-bundle)",
+        f"- Route-target prefix: `{TERACO_ASN}` (shared across both endpoints)",
+        "",
+        "## Endpoints",
+        "",
+    ]
+    for ep in scenario["endpoints"]:
+        v = VENDORS[ep["vendor"]]
+        lines.append(
+            f"- **{ep['role']}** — {v['label']} ({v['syntax']}), "
+            f"interface `{v['interface']}`, local ASN `{ep['asn']}`, "
+            f"RD `{ep['asn']}:{scenario['service_key'][2:]}`"
+        )
+    lines += ["", "## Files", ""]
+    lines += [f"- `{f}`" for f in files]
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _summary(scenarios: List[dict]) -> str:
+    lines = [
+        "# EVPN circuit validation matrix",
+        "",
+        "Generated by `scripts/generate_evpn_validation.py` (offline, via MockDriver).",
+        "Scope: non-Azure, global-transport `cloud_vc` and `p2p_vc` circuits.",
+        "",
+        "**VNI:** allocated sequentially and tracked by a process outside this",
+        "library, then passed in whole. It is used verbatim for the VXLAN id /",
+        "vpn-id and for the mac-vrf / vlan-aware-bundle — never derived from the",
+        "VLAN. cloud_vc and p2p_vc render identically given the same vni/vlan.",
+        "",
+        "| Scenario | Service | Endpoints | VLAN | VNI |",
+        "|----------|---------|-----------|------|-----|",
+    ]
+    for s in scenarios:
+        eps = " ↔ ".join(
+            f"{ep['role']}/{VENDORS[ep['vendor']]['label']}" for ep in s["endpoints"]
+        )
+        lines.append(
+            f"| `{s['name']}` | {s['service_type']} | {eps} | {s['vlan']} | {s['vni']} |"
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def generate_all() -> Dict[str, str]:
+    """Render the whole matrix. Returns {relative_path: file_content}."""
+    out: Dict[str, str] = {}
+    for scenario in SCENARIOS:
+        folder = scenario["name"]
+        files: List[str] = []
+        # Number endpoints so two same-vendor endpoints get distinct filenames.
+        for idx, ep in enumerate(scenario["endpoints"], start=1):
+            v = VENDORS[ep["vendor"]]
+            create, delete = _render_endpoint(scenario, ep)
+            base = f"{idx}_{ep['role']}__{v['label']}"
+            create_name = f"{base}.{v['ext']}"
+            delete_name = f"{base}.delete.{v['ext']}"
+            out[f"{folder}/{create_name}"] = create + "\n"
+            out[f"{folder}/{delete_name}"] = delete + "\n"
+            files += [create_name, delete_name]
+        out[f"{folder}/README.md"] = _scenario_readme(scenario, files)
+    out["SUMMARY.md"] = _summary(SCENARIOS)
+    return out
+
+
+def output_dir() -> Path:
+    return Path(__file__).resolve().parent.parent / OUTPUT_DIRNAME
+
+
+def main() -> None:
+    root = output_dir()
+    artifacts = generate_all()
+    for rel_path, content in artifacts.items():
+        dest = root / rel_path
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(content)
+    print(f"Wrote {len(artifacts)} files to {root}")
+    print(f"Review {root / 'SUMMARY.md'} and send {OUTPUT_DIRNAME}/ to network engineering.")
+
+
+if __name__ == "__main__":
+    main()

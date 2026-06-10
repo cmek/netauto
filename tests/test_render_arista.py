@@ -251,16 +251,35 @@ router bgp 65511
         )
         assert (
             "\n".join(cfg)
-            == """interface eth3
-  switchport trunk allowed vlan remove 30
-router bgp 65511
-  no vlan 30
-  exit
+            == """router bgp 65511
+   vlan-aware-bundle SO9999
+      no vlan 30
 interface Vxlan1
-  no vxlan vlan 30 vni 5011
-  exit"""
+   no vxlan vlan 30 vni 5011
+interface eth3
+   switchport trunk allowed vlan remove 30
+no vlan 30"""
         )
 
+
+    def test_render_evpn_uses_vni_verbatim(self):
+        """The VNI is allocated externally and used as-is for the VXLAN id; the
+        vlan-aware-bundle keeps the service key. service_type does not change it."""
+        for service_type in ("cloud_vc", "p2p_vc"):
+            cfg = "\n".join(
+                self.renderer.render_evpn(
+                    Interface(name="Ethernet6"),
+                    Evpn(
+                        vlan=Vlan(vlan_id=100, name="SO555"),
+                        asn=65001,
+                        vni=5000,
+                        description="SO555",
+                        service_type=service_type,
+                    ),
+                )
+            )
+            assert "vxlan vlan 100 vni 5000\n" in cfg + "\n"
+            assert "vlan-aware-bundle SO555" in cfg
 
     def test_render_routing_instance(self):
         """Test rendering routing instance config"""

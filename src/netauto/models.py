@@ -50,9 +50,19 @@ class Evpn(BaseModel):
     vlan: Vlan
     description: str
     asn: int
+    # VNI for the circuit. Allocated sequentially and tracked by a process
+    # *outside* this library (which reads current network state via netauto);
+    # it is passed in whole and used verbatim for the VXLAN id / vpn-id and the
+    # mac-vrf / vlan-aware-bundle identifier. Never derived from the VLAN.
     vni: int
+    # Descriptive product label only — does not affect rendering. cloud_vc and
+    # p2p_vc render identically given the same vni/vlan.
+    service_type: Literal["cloud_vc", "p2p_vc"] = "p2p_vc"
 
 
+# NOTE: EvpnService/Vrf predate the renderer layer and are unused by the
+# current building blocks, which standardise on Evpn + RoutingInstance. Kept for
+# backwards compatibility; do not build new code on them.
 class EvpnService(Evpn):
     connections: list[Connection]
     vlan_id: int

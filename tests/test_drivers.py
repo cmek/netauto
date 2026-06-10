@@ -33,6 +33,27 @@ class TestOcnosDriver:
         assert by_name["po10"].members == ["eth3"]
         assert by_name["eth3"].lag_member_of == "po10"
 
+    def test_ocnos_extract_vnis(self):
+        """Parse configured VNIs from a vxlan get-reply.
+
+        Regression guard: get_vnis() previously used findtext() with a
+        local-name() predicate, which lxml ElementPath rejects ("invalid
+        predicate"), so it always errored and returned []. The VNI-in-use guard
+        in EvpnManager relies on this, so it must actually parse.
+        """
+        with open("tests/ocnos_vxlan.xml") as f:
+            root = etree.fromstring(f.read().encode())
+
+        vnis = OcnosDriver._extract_vnis(_FakeReply(root))
+        assert vnis == [10010, 10020]
+
+    def test_ocnos_extract_vnis_empty(self):
+        """No vxlan tenants -> empty list (not an error)."""
+        root = etree.fromstring(
+            b'<data xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"/>'
+        )
+        assert OcnosDriver._extract_vnis(_FakeReply(root)) == []
+
 
 class TestMockDriver:
     """Test suite for MockDriver functionality."""

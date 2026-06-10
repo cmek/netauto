@@ -200,6 +200,7 @@ class OcnosDeviceRenderer(DeviceRenderer):
         vlan: Vlan,
         from_azure: Optional[bool] = False,
         evpn: Optional[Evpn] = None,
+        include_rewrite: bool = True,
     ) -> ET.Element:
         interfaces = self._append_interface(
             root,
@@ -223,27 +224,33 @@ class OcnosDeviceRenderer(DeviceRenderer):
         subenc = ET.SubElement(
             extended, self._tag("ifext", "subinterface-encapsulation")
         )
-        rewrite = ET.SubElement(subenc, self._tag("ifext", "rewrite"))
-        rewrite_config = ET.SubElement(rewrite, self._tag("ifext", "config"))
 
-        # Could we move this into a j2 template or something cause
-        if vlan.s_tag:
-            ET.SubElement(
-                rewrite_config, self._tag("ifext", "vlan-action")
-            ).text = "push"
-            ET.SubElement(
-                rewrite_config, self._tag("ifext", "push-outer-vlan-id")
-            ).text = str(vlan.s_tag)
-            ET.SubElement(
-                rewrite_config, self._tag("ifext", "push-tpid")
-            ).text = "0x8100"
-        else:
-            ET.SubElement(
-                rewrite_config, self._tag("ifext", "vlan-action")
-            ).text = "pop"
-            ET.SubElement(
-                rewrite_config, self._tag("ifext", "enable-pop")
-            ).text = "1tag"
+        # A basic single-tag EVPN access sub-interface is plain `encapsulation
+        # dot1q <vlan>` with NO tag rewrite (see mermaid/acxv2_templates
+        # cloud_vc/p2p_vc ipi). The rewrite (pop/push) only applies to QinQ /
+        # Azure S-TAG handling and to LAG VLAN migration, so it is opt-in.
+        if include_rewrite:
+            rewrite = ET.SubElement(subenc, self._tag("ifext", "rewrite"))
+            rewrite_config = ET.SubElement(rewrite, self._tag("ifext", "config"))
+
+            # Could we move this into a j2 template or something cause
+            if vlan.s_tag:
+                ET.SubElement(
+                    rewrite_config, self._tag("ifext", "vlan-action")
+                ).text = "push"
+                ET.SubElement(
+                    rewrite_config, self._tag("ifext", "push-outer-vlan-id")
+                ).text = str(vlan.s_tag)
+                ET.SubElement(
+                    rewrite_config, self._tag("ifext", "push-tpid")
+                ).text = "0x8100"
+            else:
+                ET.SubElement(
+                    rewrite_config, self._tag("ifext", "vlan-action")
+                ).text = "pop"
+                ET.SubElement(
+                    rewrite_config, self._tag("ifext", "enable-pop")
+                ).text = "1tag"
 
         singletag = ET.SubElement(subenc, self._tag("ifext", "single-tag-vlan-matches"))
         singletagmatch = ET.SubElement(
@@ -704,6 +711,9 @@ class OcnosDeviceRenderer(DeviceRenderer):
             evpn.vlan,
             from_azure=from_azure,
             evpn=evpn,
+            # Basic single-tag EVPN circuit: plain `encapsulation dot1q`, no
+            # tag rewrite (QinQ/Azure adds rewrite via the from_azure path).
+            include_rewrite=False,
         )
         config = self._append_ethernet_vpn_access(
             config, f"{interface.name}.{evpn.vlan.vlan_id}", evpn.vni

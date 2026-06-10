@@ -1,66 +1,179 @@
-from typing import List
-from .models import EvpnService, Vrf
+import logging
+from typing import List, Optional
+
+from .models import Asn, Evpn, Interface, RoutingInstance
 from .drivers import DeviceDriver
-from .renderer import TemplateRenderer
+from .exceptions import NetAutoException
+from .logic import _as_interface_map
+
+logger = logging.getLogger(__name__)
 
 
 class EvpnManager:
+    """Building blocks for single-device EVPN circuit create/delete.
+
+    Mirrors :class:`~netauto.logic.LagManager`: it configures **one endpoint
+    interface on one device** per call (read device state, validate, render,
+    push). Stitching the two ends of a circuit together across devices is the
+    orchestrator's job (Prefect) — this library only provides the per-device
+    primitive.
+
+    Scope: global transport (EVPN/VXLAN) ``cloud_vc`` and ``p2p_vc`` circuits.
+    No Azure / local switching yet. The VNI is allocated by an external process
+    and passed in whole on the :class:`~netauto.models.Evpn` model; it is used
+    verbatim (never derived from the VLAN).
+    """
+
     def __init__(self, driver: DeviceDriver):
         self.driver = driver
-        self.renderer = TemplateRenderer()
 
-    def deploy_service(
-        self, service: EvpnService, vrf: Vrf, bgp_as: int = 65001
-    ) -> List[str]:
+    def _normalise(self, rendered) -> List[str]:
+        """Renderers return a CLI line list (Arista) or one XML string (OcNOS)."""
+        return rendered if isinstance(rendered, list) else [rendered]
+
+    def _require_interface(self, interface_name: str) -> Interface:
+        """Confirm the endpoint exists. Routed (L3) ports show up in the
+        interface inventory but not in get_switchports(), so check both."""
+        inventory = _as_interface_map(self.driver.get_interfaces())
+        switchports = _as_interface_map(self.driver.get_switchports())
+        interface = inventory.get(interface_name) or switchports.get(interface_name)
+        if interface is None:
+            raise NetAutoException(
+                f"Interface {interface_name} does not exist on device."
+            )
+        return interface
+
+    def _require_vni_free(self, evpn: Evpn) -> None:
+        """The VNI must not already be mapped on this device.
+
+        VNIs are allocated by an external process; this is a safety check that
+        the value handed to us isn't already in use on the device.
         """
-        Generates configuration to deploy an EVPN service using templates.
-        Validates that the VNI is not already in use.
+        # get_vnis() is a dict (Arista: vni -> {vlan_id}) or a list (OcNOS).
+        existing = self.driver.get_vnis()
+        if evpn.vni in existing:
+            detail = ""
+            if isinstance(existing, dict):
+                mapped = existing[evpn.vni] or {}
+                detail = f" (mapped to VLAN {mapped.get('vlan_id', 'unknown')})"
+            raise NetAutoException(f"VNI {evpn.vni} is already in use{detail}")
+
+    def create_circuit(
+        self,
+        interface_name: str,
+        evpn: Evpn,
+        routing_instance: Optional[RoutingInstance] = None,
+        asn: Optional[Asn] = None,
+        create_vrf: bool = True,
+        dry_run: bool = False,
+    ) -> str:
+        """Provision one EVPN circuit endpoint on ``interface_name``.
+
+        Optionally creates the mac-vrf / vlan-aware-bundle first
+        (``create_vrf``); pass ``create_vrf=False`` when the service VRF already
+        exists on the device. Returns the combined config diff (or the intended
+        change for ``dry_run``).
+
+        The VRF and the circuit are pushed as two separate device transactions,
+        VRF first: on OcNOS the mac-vrf must exist before the circuit references
+        it, and on Arista a fresh config session avoids CLI sub-mode leaking
+        between the two blocks (a bare ``vlan <id>`` after a ``vlan-aware-bundle``
+        block is otherwise swallowed as a bundle member).
         """
-        # Validate VNI is not in use
-        existing_vnis = self.driver.get_vnis()
-        if service.vni in existing_vnis:
-            raise ValueError(
-                f"VNI {service.vni} is already in use "
-                f"(mapped to VLAN {existing_vnis[service.vni].get('vlan_id', 'unknown')})"
+        self._require_interface(interface_name)
+        self._require_vni_free(evpn)
+
+        interface = Interface(name=interface_name)
+        diffs: List[str] = []
+
+        if create_vrf:
+            if routing_instance is None:
+                raise NetAutoException(
+                    "routing_instance is required when create_vrf=True"
+                )
+            # The vlan-aware-bundle / mac-vrf is named by the service key on both
+            # the VRF push and the EVPN push; they must reference the same bundle.
+            if routing_instance.instance_name != evpn.description:
+                raise NetAutoException(
+                    "routing_instance.instance_name "
+                    f"({routing_instance.instance_name!r}) must match "
+                    f"evpn.description ({evpn.description!r}) so the VRF and the "
+                    "EVPN circuit reference the same service instance."
+                )
+            diffs.append(
+                self.driver.push_config(
+                    self._normalise(
+                        self.driver.renderer.render_routing_instance(
+                            asn or Asn(asn=evpn.asn), routing_instance
+                        )
+                    ),
+                    dry_run=dry_run,
+                )
             )
 
-        # Prepare context for template
-        context = {
-            "vlan_id": service.vlan_id,
-            "vni": service.vni,
-            "s_tag": service.s_tag,
-            "vrf": {
-                "name": vrf.name,
-                "rd": vrf.rd,
-                "rt_import": vrf.rt_import,
-                "rt_export": vrf.rt_export,
-            },
-            "bgp_as": bgp_as,
-        }
+        logger.info(
+            "creating %s EVPN circuit on %s (vni %s)",
+            evpn.service_type,
+            interface_name,
+            evpn.vni,
+        )
+        diffs.append(
+            self.driver.push_config(
+                self._normalise(self.driver.renderer.render_evpn(interface, evpn)),
+                dry_run=dry_run,
+            )
+        )
+        return "\n".join(d for d in diffs if d)
 
-        # Render configuration using template
-        commands = self.renderer.render_evpn(self.driver.platform, **context)
+    def delete_circuit(
+        self,
+        interface_name: str,
+        evpn: Evpn,
+        routing_instance: Optional[RoutingInstance] = None,
+        asn: Optional[Asn] = None,
+        delete_vrf: bool = False,
+        dry_run: bool = False,
+    ) -> str:
+        """Tear down one EVPN circuit endpoint on ``interface_name``.
 
-        return commands
+        Removes the circuit (sub-interface / access binding / VXLAN mapping).
+        Pass ``delete_vrf=True`` (with ``routing_instance``) to also remove the
+        service mac-vrf — only safe once no other endpoint uses it.
 
-    def delete_service(
-        self, service: EvpnService, vrf_name: str, bgp_as: int = 65001
-    ) -> List[str]:
+        Pushed as two separate transactions (circuit first, then the VRF), for
+        the same per-platform reasons as ``create_circuit``.
         """
-        Generates configuration to delete an EVPN service using templates.
-        """
-        # Prepare context for template
-        context = {
-            "vlan_id": service.vlan_id,
-            "vni": service.vni,
-            "vrf_name": vrf_name,
-            "bgp_as": bgp_as,
-        }
+        interface = Interface(name=interface_name)
 
-        # Render delete configuration using template
-        commands = self.renderer.render_evpn_delete(self.driver.platform, **context)
+        logger.info(
+            "deleting %s EVPN circuit on %s (vni %s)",
+            evpn.service_type,
+            interface_name,
+            evpn.vni,
+        )
+        diffs: List[str] = [
+            self.driver.push_config(
+                self._normalise(
+                    self.driver.renderer.render_evpn_delete(interface, evpn)
+                ),
+                dry_run=dry_run,
+            )
+        ]
 
-        return commands
+        if delete_vrf:
+            if routing_instance is None:
+                raise NetAutoException(
+                    "routing_instance is required when delete_vrf=True"
+                )
+            diffs.append(
+                self.driver.push_config(
+                    self._normalise(
+                        self.driver.renderer.render_routing_instance_delete(
+                            asn or Asn(asn=evpn.asn), routing_instance
+                        )
+                    ),
+                    dry_run=dry_run,
+                )
+            )
 
-    def apply(self, commands: List[str]):
-        self.driver.push_config(commands)
+        return "\n".join(d for d in diffs if d)

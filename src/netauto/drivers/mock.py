@@ -1,5 +1,5 @@
 from typing import List, Dict, Any
-from ..models import Interface, Vlan, Lag
+from ..models import Interface, Vlan, Lag, Evpn
 from .base import DeviceDriver
 from netauto.render import AristaDeviceRenderer, OcnosDeviceRenderer
 
@@ -74,6 +74,22 @@ class MockDriver(DeviceDriver):
             self.renderer.render_lag_delete(lag)
             if delete
             else self.renderer.render_lag(lag)
+        )
+        # Arista renderer returns a list of lines; OcNOS returns a single XML string.
+        commands = rendered if isinstance(rendered, list) else [rendered]
+        return self.push_config(commands, dry_run=dry_run)
+
+    def push_evpn(
+        self,
+        interface: Interface,
+        evpn: Evpn,
+        delete: bool = False,
+        dry_run: bool = False,
+    ) -> str:
+        rendered = (
+            self.renderer.render_evpn_delete(interface, evpn)
+            if delete
+            else self.renderer.render_evpn(interface, evpn)
         )
         # Arista renderer returns a list of lines; OcNOS returns a single XML string.
         commands = rendered if isinstance(rendered, list) else [rendered]
