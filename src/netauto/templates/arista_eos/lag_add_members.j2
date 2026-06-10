@@ -1,0 +1,6 @@
+{# Arista EOS: add members to an existing LAG #}
+{% for member in lag.members %}
+interface {{ member.name }}
+  channel-group {{ lag.name.removeprefix("Port-Channel") }} mode {{ lag.lacp_mode }}
+  exit
+{% endfor %}

@@ -1,0 +1,6 @@
+{# Arista EOS: detach members from a LAG (LAG interface left intact) #}
+{% for member in lag.members %}
+interface {{ member.name }}
+  no channel-group
+  exit
+{% endfor %}
