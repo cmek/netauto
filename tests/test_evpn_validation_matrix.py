@@ -32,11 +32,11 @@ OUTPUT_DIR = gen.output_dir()
 
 
 def test_matrix_covers_all_scenarios():
-    # 7 scenarios x (2 endpoints x [create, delete] = 4 files + README) + SUMMARY
-    assert len(gen.SCENARIOS) == 7
+    assert len(gen.SCENARIOS) == 7  # p2p_vc (3) + cloud_vc (4)
+    assert len(gen.AZURE_SCENARIOS) == 5  # Azure standard (3) + rewrite (2)
     assert "SUMMARY.md" in ARTIFACTS
     # every scenario contributes a README and 4 endpoint files
-    for scenario in gen.SCENARIOS:
+    for scenario in gen.SCENARIOS + gen.AZURE_SCENARIOS:
         assert f"{scenario['name']}/README.md" in ARTIFACTS
 
 

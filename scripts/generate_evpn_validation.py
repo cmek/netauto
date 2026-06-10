@@ -1,11 +1,12 @@
 """Generate example EVPN circuit configuration for every supported scenario.
 
 This renders the per-device building blocks (``EvpnManager``) offline via
-``MockDriver`` — no lab devices required — for the full matrix of non-Azure,
+``MockDriver`` — no lab devices required — for the full matrix of
 global-transport circuits:
 
   * ``p2p_vc``  (member A <-> member B): arista/arista, ocnos/ocnos, mixed
   * ``cloud_vc`` (customer <-> CNI):     CNI on both Arista and OcNOS
+  * ``azure``    (Q-in-Q, customer <-> CNI): S-TAG + 1-3 C-TAGs, incl. rewrite
 
 Each scenario is laid out as a complete circuit (both endpoints) with create and
 delete config, so the network engineering team can review what we will push
@@ -30,9 +31,10 @@ from typing import Dict, List
 
 from netauto.drivers import MockDriver
 from netauto.evpn import EvpnManager
-from netauto.models import Asn, Evpn, Interface, RoutingInstance, Vlan
+from netauto.models import Asn, AzureEvpn, Evpn, Interface, RoutingInstance, Vlan
 
-TERACO_ASN = 37195  # route-target prefix (from the ACXv2 reference templates)
+TERACO_ASN = 37195  # route-target prefix (non-Azure, from the reference templates)
+AZURE_RT = 37186    # route-target prefix used by the Azure reference templates
 OUTPUT_DIRNAME = "validation_output"
 
 # Per-vendor presentation details.
@@ -126,6 +128,78 @@ SCENARIOS = [
 ]
 
 
+# Azure ExpressRoute Q-in-Q scenarios. The customer port tunnels 1-3 inner
+# C-TAGs into the outer S-TAG; the CNI port keys on the S-TAG. Dual-CNI is the
+# orchestrator's job (one call + VNI per CNI) — each scenario shows one circuit
+# (one VNI). The rewrite variants show S-TAG conflict resolution on the CNI.
+AZURE_SCENARIOS = [
+    {
+        "name": "azure__cust-arista_cni-arista",
+        "azure": True,
+        "service_key": "SO303030",
+        "s_tag": 700,
+        "c_tags": [10, 20, 30],
+        "vni": 7000,
+        "endpoints": [
+            {"role": "customer", "vendor": "arista_eos", "asn": 65001},
+            {"role": "cni", "vendor": "arista_eos", "asn": 65010},
+        ],
+    },
+    {
+        "name": "azure__cust-ocnos_cni-ocnos",
+        "azure": True,
+        "service_key": "SO303031",
+        "s_tag": 701,
+        "c_tags": [11, 21],
+        "vni": 7001,
+        "endpoints": [
+            {"role": "customer", "vendor": "ipinfusion_ocnos", "asn": 65001},
+            {"role": "cni", "vendor": "ipinfusion_ocnos", "asn": 65010},
+        ],
+    },
+    {
+        "name": "azure__cust-arista_cni-ocnos",
+        "azure": True,
+        "service_key": "SO303032",
+        "s_tag": 702,
+        "c_tags": [12, 22, 32],
+        "vni": 7002,
+        "endpoints": [
+            {"role": "customer", "vendor": "arista_eos", "asn": 65001},
+            {"role": "cni", "vendor": "ipinfusion_ocnos", "asn": 65010},
+        ],
+    },
+    {
+        # S-TAG conflict on the Arista CNI: Azure S-TAG 703 translated to
+        # internal S-TAG 2703.
+        "name": "azure__rewrite_cni-arista",
+        "azure": True,
+        "service_key": "SO303033",
+        "s_tag": 703,
+        "c_tags": [13, 23],
+        "vni": 7003,
+        "endpoints": [
+            {"role": "customer", "vendor": "arista_eos", "asn": 65001},
+            {"role": "cni", "vendor": "arista_eos", "asn": 65010,
+             "rewrite": True, "internal_s_tag": 2703},
+        ],
+    },
+    {
+        # S-TAG conflict on the OcNOS CNI: pop the Azure S-TAG, disable arp/nd.
+        "name": "azure__rewrite_cni-ocnos",
+        "azure": True,
+        "service_key": "SO303034",
+        "s_tag": 704,
+        "c_tags": [14, 24],
+        "vni": 7004,
+        "endpoints": [
+            {"role": "customer", "vendor": "ipinfusion_ocnos", "asn": 65001},
+            {"role": "cni", "vendor": "ipinfusion_ocnos", "asn": 65010, "rewrite": True},
+        ],
+    },
+]
+
+
 def _endpoint_files(scenario: dict):
     """(endpoint, create_name, delete_name) per endpoint — single source of the
     filenames so generate_all() and the SUMMARY links never diverge."""
@@ -175,7 +249,49 @@ def _render_endpoint(scenario: dict, endpoint: dict) -> tuple[str, str]:
     return create, delete
 
 
+def _render_azure_endpoint(scenario: dict, endpoint: dict) -> tuple[str, str]:
+    """Return (create, delete) for one Azure Q-in-Q endpoint, via EvpnManager."""
+    vendor = endpoint["vendor"]
+    interface = VENDORS[vendor]["interface"]
+    key = scenario["service_key"]
+    num = key[2:]
+
+    driver = MockDriver(
+        platform=vendor,
+        initial_interfaces=[Interface(name=interface)],
+        initial_switchports=[Interface(name=interface, mode="trunk")],
+    )
+    mgr = EvpnManager(driver)
+
+    fields = dict(
+        description=key, asn=endpoint["asn"], vni=scenario["vni"],
+        s_tag=scenario["s_tag"], role=endpoint["role"],
+    )
+    if endpoint["role"] == "customer":
+        fields["c_tags"] = scenario["c_tags"]
+    elif endpoint.get("rewrite"):
+        fields["rewrite"] = True
+        if endpoint.get("internal_s_tag") is not None:
+            fields["internal_s_tag"] = endpoint["internal_s_tag"]
+    azure = AzureEvpn(**fields)
+
+    ri = RoutingInstance(
+        instance_name=key, instance_type="mac-vrf",
+        rd=f"{endpoint['asn']}:{num}", rt_rd=f"{AZURE_RT}:{num}",
+    )
+    create = mgr.create_azure_circuit(
+        interface, azure, routing_instance=ri, asn=Asn(asn=endpoint["asn"]), dry_run=True
+    )
+    delete = mgr.delete_azure_circuit(
+        interface, azure, routing_instance=ri, asn=Asn(asn=endpoint["asn"]),
+        delete_vrf=True, dry_run=True,
+    )
+    return create, delete
+
+
 def _scenario_readme(scenario: dict, files: List[str]) -> str:
+    if scenario.get("azure"):
+        return _azure_scenario_readme(scenario, files)
     st = scenario["service_type"]
     vni, vlan = scenario["vni"], scenario["vlan"]
     lines = [
@@ -204,7 +320,44 @@ def _scenario_readme(scenario: dict, files: List[str]) -> str:
     return "\n".join(lines)
 
 
-def _summary(scenarios: List[dict]) -> str:
+def _azure_scenario_readme(scenario: dict, files: List[str]) -> str:
+    lines = [
+        f"# {scenario['name']}",
+        "",
+        "- Service type: **azure** (ExpressRoute Q-in-Q / 802.1ad)",
+        f"- Service key: `{scenario['service_key']}`",
+        f"- S-TAG (outer): `{scenario['s_tag']}`",
+        f"- C-TAGs (inner, customer side): `{scenario['c_tags']}`",
+        f"- VNI: `{scenario['vni']}`  (one circuit; dual-CNI uses one VNI per CNI)",
+        f"- Route-target prefix: `{AZURE_RT}`",
+        "",
+        "The customer port tunnels each C-TAG into the S-TAG; the CNI port keys "
+        "on the S-TAG (C-TAGs are encapsulated). Azure mandates dual CNI — the "
+        "orchestrator repeats the CNI config on the secondary CNI with its own VNI.",
+        "",
+        "## Endpoints",
+        "",
+    ]
+    for ep in scenario["endpoints"]:
+        v = VENDORS[ep["vendor"]]
+        extra = ""
+        if ep["role"] == "cni" and ep.get("rewrite"):
+            internal = ep.get("internal_s_tag")
+            extra = (
+                f" · **S-TAG rewrite** (Azure {scenario['s_tag']} → internal {internal})"
+                if internal else " · **S-TAG rewrite** (pop + arp/nd-cache disable)"
+            )
+        lines.append(
+            f"- **{ep['role']}** — {v['label']} ({v['syntax']}), "
+            f"interface `{v['interface']}`, local ASN `{ep['asn']}`{extra}"
+        )
+    lines += ["", "## Files", ""]
+    lines += [f"- `{f}`" for f in files]
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _summary(scenarios: List[dict], azure_scenarios: List[dict]) -> str:
     lines = [
         "# EVPN circuit validation matrix",
         "",
@@ -213,9 +366,10 @@ def _summary(scenarios: List[dict]) -> str:
         "against production gear. Generated offline by",
         "`scripts/generate_evpn_validation.py` (via MockDriver — no devices).",
         "",
-        "Scope this round: non-Azure, **global transport** (EVPN/VXLAN across",
-        "different devices) `cloud_vc` (customer ↔ CNI) and `p2p_vc` (member ↔",
-        "member). Azure Q-in-Q and same-device local switching are out of scope.",
+        "Scope: **global transport** (EVPN/VXLAN across different devices) for",
+        "`cloud_vc` (customer ↔ CNI), `p2p_vc` (member ↔ member), and **Azure**",
+        "ExpressRoute Q-in-Q (S-TAG + 1-3 C-TAGs, incl. S-TAG rewrite). Same-device",
+        "local switching is out of scope.",
         "",
         "## Lab environment",
         "",
@@ -268,8 +422,46 @@ def _summary(scenarios: List[dict]) -> str:
             f"| {link} | {s['service_type']} | {eps} | {s['vlan']} | {s['vni']} |"
         )
 
+    # ---- Azure Q-in-Q scenarios ----
+    lines += [
+        "",
+        "## Azure ExpressRoute (Q-in-Q)",
+        "",
+        "The customer port wraps 1-3 inner C-TAGs into one outer S-TAG (Arista",
+        "`dot1q-tunnel`; OcNOS `rewrite push`); the CNI port keys on the S-TAG. A",
+        "rewrite scenario resolves an S-TAG conflict on the CNI (Arista translates",
+        "to an internal S-TAG; OcNOS pops the S-TAG and disables arp/nd caching).",
+        "Azure mandates dual CNI — the orchestrator repeats the CNI config per CNI",
+        "with its own VNI; each scenario below shows one circuit (one VNI).",
+        "",
+        "Live validation: the Arista CNI-rewrite and both OcNOS paths (customer +",
+        "CNI-rewrite) were run create→verify→delete on ar1/ipi1. The Arista "
+        "**customer** Q-in-Q path uses `switchport ... dot1q-tunnel`, which the "
+        "cEOSLab virtual platform does not support — it is valid on real EOS "
+        "hardware but cannot be exercised on this lab.",
+        "",
+        "| Scenario | Endpoints | S-TAG | C-TAGs | VNI | Rewrite |",
+        "|----------|-----------|-------|--------|-----|---------|",
+    ]
+    for s in azure_scenarios:
+        eps = " ↔ ".join(
+            f"{ep['role']}/{VENDORS[ep['vendor']]['label']}" for ep in s["endpoints"]
+        )
+        rw = next(
+            (ep for ep in s["endpoints"] if ep.get("rewrite")), None
+        )
+        rewrite = "—"
+        if rw:
+            rewrite = (
+                f"→ {rw['internal_s_tag']}" if rw.get("internal_s_tag") else "pop"
+            )
+        link = f"[`{s['name']}`]({s['name']}/README.md)"
+        lines.append(
+            f"| {link} | {eps} | {s['s_tag']} | {s['c_tags']} | {s['vni']} | {rewrite} |"
+        )
+
     lines += ["", "## Generated configs", ""]
-    for s in scenarios:
+    for s in scenarios + azure_scenarios:
         folder = s["name"]
         lines.append(f"### [`{folder}`]({folder}/README.md)")
         for ep, create_name, delete_name in _endpoint_files(s):
@@ -286,16 +478,19 @@ def _summary(scenarios: List[dict]) -> str:
 def generate_all() -> Dict[str, str]:
     """Render the whole matrix. Returns {relative_path: file_content}."""
     out: Dict[str, str] = {}
-    for scenario in SCENARIOS:
+    for scenario in SCENARIOS + AZURE_SCENARIOS:
+        render = (
+            _render_azure_endpoint if scenario.get("azure") else _render_endpoint
+        )
         folder = scenario["name"]
         files: List[str] = []
         for ep, create_name, delete_name in _endpoint_files(scenario):
-            create, delete = _render_endpoint(scenario, ep)
+            create, delete = render(scenario, ep)
             out[f"{folder}/{create_name}"] = create + "\n"
             out[f"{folder}/{delete_name}"] = delete + "\n"
             files += [create_name, delete_name]
         out[f"{folder}/README.md"] = _scenario_readme(scenario, files)
-    out["SUMMARY.md"] = _summary(SCENARIOS)
+    out["SUMMARY.md"] = _summary(SCENARIOS, AZURE_SCENARIOS)
     return out
 
 

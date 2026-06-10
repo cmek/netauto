@@ -1,9 +1,10 @@
 import pytest
+from pydantic import ValidationError
 
 from netauto.drivers import MockDriver
 from netauto.evpn import EvpnManager
 from netauto.exceptions import NetAutoException
-from netauto.models import Asn, Evpn, Interface, RoutingInstance, Vlan
+from netauto.models import AzureEvpn, Asn, Evpn, Interface, RoutingInstance, Vlan
 
 
 def _arista_driver(vnis=None):
@@ -147,3 +148,85 @@ class TestEvpnManagerOcnos:
             EvpnManager(driver).create_circuit(
                 "eth4", _evpn(), routing_instance=_ri()
             )
+
+
+def _azure(role="customer", c_tags=(10, 20), **kw):
+    base = dict(description="SO555", asn=65001, vni=6000, s_tag=500, role=role)
+    if role == "customer":
+        base["c_tags"] = list(c_tags)
+    base.update(kw)
+    return AzureEvpn(**base)
+
+
+class TestAzureEvpnModel:
+    def test_customer_requires_1_to_3_ctags(self):
+        with pytest.raises(ValidationError):
+            _azure(role="customer", c_tags=[])
+        with pytest.raises(ValidationError):
+            _azure(role="customer", c_tags=[1, 2, 3, 4])
+
+    def test_ctag_cannot_equal_stag(self):
+        with pytest.raises(ValidationError):
+            _azure(role="customer", c_tags=[500])
+
+    def test_cni_takes_no_ctags(self):
+        with pytest.raises(ValidationError):
+            AzureEvpn(description="SO555", asn=65001, vni=6000, s_tag=500,
+                      role="cni", c_tags=[10])
+
+    def test_rewrite_is_cni_only(self):
+        with pytest.raises(ValidationError):
+            AzureEvpn(description="SO555", asn=65001, vni=6000, s_tag=500,
+                      role="customer", c_tags=[10], rewrite=True)
+
+
+class TestEvpnManagerAzure:
+    def test_create_azure_customer_arista(self):
+        driver = MockDriver(
+            platform="arista_eos",
+            initial_interfaces=[Interface(name="Ethernet6")],
+            initial_switchports=[Interface(name="Ethernet6", mode="trunk")],
+        )
+        EvpnManager(driver).create_azure_circuit(
+            "Ethernet6", _azure(c_tags=[10, 20]), routing_instance=_ri()
+        )
+        pushed = "\n".join(driver.pushed_commands)
+        assert "switchport vlan translation 10 dot1q-tunnel 500" in pushed
+        assert "vxlan vlan 500 vni 6000" in pushed
+        assert "rd 65001:555" in pushed  # VRF pushed too
+
+    def test_create_azure_cni_rewrite_ocnos(self):
+        driver = MockDriver(
+            platform="ipinfusion_ocnos",
+            initial_interfaces=[Interface(name="eth4")],
+            initial_switchports=[Interface(name="eth4", mode="trunk")],
+        )
+        EvpnManager(driver).create_azure_circuit(
+            "eth4", _azure(role="cni", rewrite=True), routing_instance=_ri()
+        )
+        pushed = "\n".join(driver.pushed_commands)
+        assert "<ifext:vlan-action>pop</ifext:vlan-action>" in pushed
+        assert "<ethvpn:arp-cache-disable" in pushed
+
+    def test_azure_vni_in_use_raises(self):
+        driver = MockDriver(
+            platform="arista_eos",
+            initial_interfaces=[Interface(name="Ethernet6")],
+            initial_switchports=[Interface(name="Ethernet6", mode="trunk")],
+            initial_vnis={6000: {"vlan_id": 500}},
+        )
+        with pytest.raises(NetAutoException):
+            EvpnManager(driver).create_azure_circuit(
+                "Ethernet6", _azure(), routing_instance=_ri()
+            )
+
+    def test_azure_dry_run_records_nothing(self):
+        driver = MockDriver(
+            platform="arista_eos",
+            initial_interfaces=[Interface(name="Ethernet6")],
+            initial_switchports=[Interface(name="Ethernet6", mode="trunk")],
+        )
+        EvpnManager(driver).create_azure_circuit(
+            "Ethernet6", _azure(), routing_instance=_ri(), dry_run=True
+        )
+        assert driver.pushed_commands == []

@@ -1,0 +1,16 @@
+{# Arista EOS Azure ExpressRoute Q-in-Q EVPN circuit delete #}
+router bgp {{ azure.asn }}
+   vlan-aware-bundle {{ azure.description }}
+      no vlan {{ effective_s_tag }}
+interface Vxlan1
+   no vxlan vlan {{ effective_s_tag }} vni {{ azure.vni }}
+interface {{ interface.name }}
+   switchport trunk allowed vlan remove {{ effective_s_tag }}
+{% if azure.role == "customer" %}
+{% for ctag in azure.c_tags %}
+   no switchport vlan translation {{ ctag }} dot1q-tunnel {{ azure.s_tag }}
+{% endfor %}
+{% elif azure.rewrite %}
+   no switchport vlan translation {{ azure.s_tag }} {{ azure.internal_s_tag }}
+{% endif %}
+no vlan {{ effective_s_tag }}

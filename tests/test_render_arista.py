@@ -1,6 +1,6 @@
 import pytest
 from netauto.render.arista import AristaDeviceRenderer
-from netauto.models import Evpn, Vlan, Interface, Lag, RoutingInstance, Asn
+from netauto.models import Evpn, Vlan, Interface, Lag, RoutingInstance, Asn, AzureEvpn
 
 
 class TestAristaDeviceRenderer:
@@ -280,6 +280,70 @@ no vlan 30"""
             )
             assert "vxlan vlan 100 vni 5000\n" in cfg + "\n"
             assert "vlan-aware-bundle SO555" in cfg
+
+    def test_render_azure_customer_multi_ctag(self):
+        """Customer side tunnels each C-TAG into the S-TAG via dot1q-tunnel."""
+        cfg = "\n".join(
+            self.renderer.render_azure_evpn(
+                Interface(name="Ethernet6"),
+                AzureEvpn(
+                    description="SO555", asn=65001, vni=6000, s_tag=500,
+                    role="customer", c_tags=[10, 20, 30],
+                ),
+            )
+        )
+        assert "switchport vlan translation 10 dot1q-tunnel 500" in cfg
+        assert "switchport vlan translation 20 dot1q-tunnel 500" in cfg
+        assert "switchport vlan translation 30 dot1q-tunnel 500" in cfg
+        assert "vxlan vlan 500 vni 6000" in cfg
+        assert "vlan-aware-bundle SO555" in cfg
+
+    def test_render_azure_cni_standard_has_no_translation(self):
+        cfg = "\n".join(
+            self.renderer.render_azure_evpn(
+                Interface(name="Ethernet6"),
+                AzureEvpn(description="SO555", asn=65001, vni=6000, s_tag=500, role="cni"),
+            )
+        )
+        assert "vxlan vlan 500 vni 6000" in cfg
+        assert "vlan translation" not in cfg
+        assert "dot1q-tunnel" not in cfg
+
+    def test_render_azure_cni_rewrite_translates_to_internal_stag(self):
+        cfg = "\n".join(
+            self.renderer.render_azure_evpn(
+                Interface(name="Ethernet6"),
+                AzureEvpn(
+                    description="SO555", asn=65001, vni=6000, s_tag=500,
+                    role="cni", rewrite=True, internal_s_tag=2500,
+                ),
+            )
+        )
+        # Azure S-TAG 500 translated to internal 2500; VXLAN keyed on internal
+        assert "switchport vlan translation 500 2500" in cfg
+        assert "vxlan vlan 2500 vni 6000" in cfg
+        assert "vlan 2500" in cfg
+
+    def test_render_azure_cni_rewrite_requires_internal_stag(self):
+        with pytest.raises(ValueError):
+            self.renderer.render_azure_evpn(
+                Interface(name="Ethernet6"),
+                AzureEvpn(description="SO555", asn=65001, vni=6000, s_tag=500,
+                          role="cni", rewrite=True),
+            )
+
+    def test_render_azure_customer_delete(self):
+        cfg = "\n".join(
+            self.renderer.render_azure_evpn_delete(
+                Interface(name="Ethernet6"),
+                AzureEvpn(description="SO555", asn=65001, vni=6000, s_tag=500,
+                          role="customer", c_tags=[10, 20]),
+            )
+        )
+        assert "no vxlan vlan 500 vni 6000" in cfg
+        assert "no switchport vlan translation 10 dot1q-tunnel 500" in cfg
+        assert "no switchport vlan translation 20 dot1q-tunnel 500" in cfg
+        assert "no vlan 500" in cfg
 
     def test_render_routing_instance(self):
         """Test rendering routing instance config"""

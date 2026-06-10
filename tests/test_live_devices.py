@@ -3,7 +3,7 @@ import os
 from netauto.drivers import AristaDriver, OcnosDriver
 from netauto.evpn import EvpnManager
 from netauto.logic import LagManager
-from netauto.models import Asn, Evpn, Interface, RoutingInstance, Vlan
+from netauto.models import Asn, AzureEvpn, Evpn, Interface, RoutingInstance, Vlan
 
 # Skip tests unless explicitly enabled
 RUN_LIVE_TESTS = os.getenv("RUN_LIVE_TESTS") == "1"
@@ -138,6 +138,92 @@ class TestLiveEvpn:
             mgr.delete_circuit(interface, evpn, routing_instance=ri, delete_vrf=True)
         final = driver.get_config()
         assert key not in final
+        driver.disconnect()
+
+
+@pytest.mark.skipif(not RUN_LIVE_TESTS, reason="Live tests not enabled")
+class TestLiveAzure:
+    """Azure Q-in-Q circuit create -> verify -> delete (self-cleaning).
+
+    Note: cEOSLab (virtual EOS) does not support `switchport ... dot1q-tunnel`,
+    so the Arista *customer* Q-in-Q path can't be exercised on this lab (it is
+    valid on real EOS hardware). The Arista CNI *rewrite* path uses plain
+    `switchport vlan translation` and does work; OcNOS does both.
+    """
+
+    @pytest.mark.skip(reason="cEOSLab has no dot1q-tunnel (Q-in-Q) hardware support")
+    def test_arista_azure_customer_qinq(self):
+        pass
+
+    def test_arista_azure_cni_rewrite(self):
+        driver = AristaDriver(host=ARISTA_HOST, user=USERNAME, password=PASSWORD,
+                              enable_password=os.getenv("ARISTA_ENABLE", "admin"))
+        driver.connect()
+        cfg = driver.get_config()
+        s_tag = _free_value(cfg, range(3700, 3799), lambda v: f"vlan {v} ")
+        internal = _free_value(cfg, range(3800, 3899), lambda v: f"vlan {v} ")
+        vni = _free_value(cfg, range(39700, 39799), lambda v: f"vni {v}")
+        key = f"SO9{vni}"
+        interface = os.getenv("ARISTA_EVPN_PORT", "Ethernet6")
+
+        azure = AzureEvpn(description=key, asn=ARISTA_ASN, vni=vni, s_tag=s_tag,
+                          role="cni", rewrite=True, internal_s_tag=internal)
+        ri = RoutingInstance(instance_name=key, instance_type="mac-vrf",
+                             rd=f"{ARISTA_ASN}:{vni}", rt_rd=f"37186:{vni}")
+        mgr = EvpnManager(driver)
+        try:
+            mgr.create_azure_circuit(interface, azure, routing_instance=ri)
+            after = driver.get_config()
+            assert f"switchport vlan translation {s_tag} {internal}" in after
+            assert f"vxlan vlan {internal} vni {vni}" in after
+        finally:
+            mgr.delete_azure_circuit(interface, azure, routing_instance=ri, delete_vrf=True)
+            driver.push_config([f"default interface {interface}"])
+        assert f"vni {vni}" not in driver.get_config()
+        driver.disconnect()
+
+    def test_ocnos_azure_customer_multi_ctag(self):
+        driver = OcnosDriver(host=OCNOS_HOST, user=USERNAME, password=OCNOS_PASSWORD)
+        driver.connect()
+        existing = set(driver.get_vnis())
+        vni = next(v for v in range(39700, 39799) if v not in existing)
+        key = f"SO9{vni}"
+        interface = os.getenv("OCNOS_EVPN_PORT", "eth4")
+        azure = AzureEvpn(description=key, asn=65003, vni=vni, s_tag=3760,
+                          role="customer", c_tags=[12, 22])
+        ri = RoutingInstance(instance_name=key, instance_type="mac-vrf",
+                             rd=f"65003:{vni}", rt_rd=f"37186:{vni}")
+        mgr = EvpnManager(driver)
+        try:
+            mgr.create_azure_circuit(interface, azure, routing_instance=ri)
+            after = driver.get_config()
+            assert f"{interface}.12" in after and f"{interface}.22" in after
+            assert "3760" in after  # pushed S-TAG
+        finally:
+            mgr.delete_azure_circuit(interface, azure, routing_instance=ri, delete_vrf=True)
+        assert key not in driver.get_config()
+        driver.disconnect()
+
+    def test_ocnos_azure_cni_rewrite(self):
+        driver = OcnosDriver(host=OCNOS_HOST, user=USERNAME, password=OCNOS_PASSWORD)
+        driver.connect()
+        existing = set(driver.get_vnis())
+        vni = next(v for v in range(39700, 39799) if v not in existing)
+        key = f"SO9{vni}"
+        interface = os.getenv("OCNOS_EVPN_PORT", "eth4")
+        azure = AzureEvpn(description=key, asn=65003, vni=vni, s_tag=3761,
+                          role="cni", rewrite=True)
+        ri = RoutingInstance(instance_name=key, instance_type="mac-vrf",
+                             rd=f"65003:{vni}", rt_rd=f"37186:{vni}")
+        mgr = EvpnManager(driver)
+        try:
+            mgr.create_azure_circuit(interface, azure, routing_instance=ri)
+            after = driver.get_config()
+            assert f"{interface}.3761" in after
+            assert "arp-cache" in after
+        finally:
+            mgr.delete_azure_circuit(interface, azure, routing_instance=ri, delete_vrf=True)
+        assert key not in driver.get_config()
         driver.disconnect()
 
 

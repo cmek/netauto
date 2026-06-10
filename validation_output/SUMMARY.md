@@ -5,9 +5,10 @@ review by network engineering before these building blocks are trusted
 against production gear. Generated offline by
 `scripts/generate_evpn_validation.py` (via MockDriver — no devices).
 
-Scope this round: non-Azure, **global transport** (EVPN/VXLAN across
-different devices) `cloud_vc` (customer ↔ CNI) and `p2p_vc` (member ↔
-member). Azure Q-in-Q and same-device local switching are out of scope.
+Scope: **global transport** (EVPN/VXLAN across different devices) for
+`cloud_vc` (customer ↔ CNI), `p2p_vc` (member ↔ member), and **Azure**
+ExpressRoute Q-in-Q (S-TAG + 1-3 C-TAGs, incl. S-TAG rewrite). Same-device
+local switching is out of scope.
 
 ## Lab environment
 
@@ -57,6 +58,26 @@ its README, or jump straight to a config below.
 | [`cloud_vc__cust-ocnos_cni-arista`](cloud_vc__cust-ocnos_cni-arista/README.md) | cloud_vc | customer/ocnos ↔ cni/arista | 202 | 6002 |
 | [`cloud_vc__cust-ocnos_cni-ocnos`](cloud_vc__cust-ocnos_cni-ocnos/README.md) | cloud_vc | customer/ocnos ↔ cni/ocnos | 203 | 6003 |
 
+## Azure ExpressRoute (Q-in-Q)
+
+The customer port wraps 1-3 inner C-TAGs into one outer S-TAG (Arista
+`dot1q-tunnel`; OcNOS `rewrite push`); the CNI port keys on the S-TAG. A
+rewrite scenario resolves an S-TAG conflict on the CNI (Arista translates
+to an internal S-TAG; OcNOS pops the S-TAG and disables arp/nd caching).
+Azure mandates dual CNI — the orchestrator repeats the CNI config per CNI
+with its own VNI; each scenario below shows one circuit (one VNI).
+
+Live validation: the Arista CNI-rewrite and both OcNOS paths (customer +
+CNI-rewrite) were run create→verify→delete on ar1/ipi1. The Arista **customer** Q-in-Q path uses `switchport ... dot1q-tunnel`, which the cEOSLab virtual platform does not support — it is valid on real EOS hardware but cannot be exercised on this lab.
+
+| Scenario | Endpoints | S-TAG | C-TAGs | VNI | Rewrite |
+|----------|-----------|-------|--------|-----|---------|
+| [`azure__cust-arista_cni-arista`](azure__cust-arista_cni-arista/README.md) | customer/arista ↔ cni/arista | 700 | [10, 20, 30] | 7000 | — |
+| [`azure__cust-ocnos_cni-ocnos`](azure__cust-ocnos_cni-ocnos/README.md) | customer/ocnos ↔ cni/ocnos | 701 | [11, 21] | 7001 | — |
+| [`azure__cust-arista_cni-ocnos`](azure__cust-arista_cni-ocnos/README.md) | customer/arista ↔ cni/ocnos | 702 | [12, 22, 32] | 7002 | — |
+| [`azure__rewrite_cni-arista`](azure__rewrite_cni-arista/README.md) | customer/arista ↔ cni/arista | 703 | [13, 23] | 7003 | → 2703 |
+| [`azure__rewrite_cni-ocnos`](azure__rewrite_cni-ocnos/README.md) | customer/ocnos ↔ cni/ocnos | 704 | [14, 24] | 7004 | pop |
+
 ## Generated configs
 
 ### [`p2p_vc__arista_to_arista`](p2p_vc__arista_to_arista/README.md)
@@ -86,3 +107,23 @@ its README, or jump straight to a config below.
 ### [`cloud_vc__cust-ocnos_cni-ocnos`](cloud_vc__cust-ocnos_cni-ocnos/README.md)
 - customer (ocnos): [create](cloud_vc__cust-ocnos_cni-ocnos/1_customer__ocnos.xml) · [delete](cloud_vc__cust-ocnos_cni-ocnos/1_customer__ocnos.delete.xml)
 - cni (ocnos): [create](cloud_vc__cust-ocnos_cni-ocnos/2_cni__ocnos.xml) · [delete](cloud_vc__cust-ocnos_cni-ocnos/2_cni__ocnos.delete.xml)
+
+### [`azure__cust-arista_cni-arista`](azure__cust-arista_cni-arista/README.md)
+- customer (arista): [create](azure__cust-arista_cni-arista/1_customer__arista.cfg) · [delete](azure__cust-arista_cni-arista/1_customer__arista.delete.cfg)
+- cni (arista): [create](azure__cust-arista_cni-arista/2_cni__arista.cfg) · [delete](azure__cust-arista_cni-arista/2_cni__arista.delete.cfg)
+
+### [`azure__cust-ocnos_cni-ocnos`](azure__cust-ocnos_cni-ocnos/README.md)
+- customer (ocnos): [create](azure__cust-ocnos_cni-ocnos/1_customer__ocnos.xml) · [delete](azure__cust-ocnos_cni-ocnos/1_customer__ocnos.delete.xml)
+- cni (ocnos): [create](azure__cust-ocnos_cni-ocnos/2_cni__ocnos.xml) · [delete](azure__cust-ocnos_cni-ocnos/2_cni__ocnos.delete.xml)
+
+### [`azure__cust-arista_cni-ocnos`](azure__cust-arista_cni-ocnos/README.md)
+- customer (arista): [create](azure__cust-arista_cni-ocnos/1_customer__arista.cfg) · [delete](azure__cust-arista_cni-ocnos/1_customer__arista.delete.cfg)
+- cni (ocnos): [create](azure__cust-arista_cni-ocnos/2_cni__ocnos.xml) · [delete](azure__cust-arista_cni-ocnos/2_cni__ocnos.delete.xml)
+
+### [`azure__rewrite_cni-arista`](azure__rewrite_cni-arista/README.md)
+- customer (arista): [create](azure__rewrite_cni-arista/1_customer__arista.cfg) · [delete](azure__rewrite_cni-arista/1_customer__arista.delete.cfg)
+- cni (arista): [create](azure__rewrite_cni-arista/2_cni__arista.cfg) · [delete](azure__rewrite_cni-arista/2_cni__arista.delete.cfg)
+
+### [`azure__rewrite_cni-ocnos`](azure__rewrite_cni-ocnos/README.md)
+- customer (ocnos): [create](azure__rewrite_cni-ocnos/1_customer__ocnos.xml) · [delete](azure__rewrite_cni-ocnos/1_customer__ocnos.delete.xml)
+- cni (ocnos): [create](azure__rewrite_cni-ocnos/2_cni__ocnos.xml) · [delete](azure__rewrite_cni-ocnos/2_cni__ocnos.delete.xml)

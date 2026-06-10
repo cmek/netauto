@@ -2,7 +2,7 @@ from .base import DeviceRenderer
 from jinja2 import Environment, PackageLoader, select_autoescape
 from typing import List
 from pathlib import Path
-from netauto.models import Interface, Lag, Evpn, Vlan, RoutingInstance, Asn
+from netauto.models import Interface, Lag, Evpn, Vlan, RoutingInstance, Asn, AzureEvpn
 
 
 class AristaDeviceRenderer(DeviceRenderer):
@@ -67,6 +67,35 @@ class AristaDeviceRenderer(DeviceRenderer):
         template_path = f"arista_eos/evpn_delete.j2"
         template = self.env.get_template(template_path)
         rendered = template.render(interface=interface, evpn=evpn)
+        return [line for line in rendered.split("\n") if line.strip()]
+
+    def _azure_context(self, interface: Interface, azure: AzureEvpn) -> dict:
+        """Common template context; resolves the effective S-TAG.
+
+        On a CNI endpoint that rewrites, Arista translates the Azure S-TAG to a
+        device-internal S-TAG and keys the VXLAN/bundle on the internal value.
+        """
+        if azure.role == "cni" and azure.rewrite and azure.internal_s_tag is None:
+            raise ValueError("Arista CNI S-TAG rewrite requires internal_s_tag")
+        effective = (
+            azure.internal_s_tag
+            if (azure.rewrite and azure.internal_s_tag is not None)
+            else azure.s_tag
+        )
+        return {"interface": interface, "azure": azure, "effective_s_tag": effective}
+
+    def render_azure_evpn(self, interface: Interface, azure: AzureEvpn) -> List[str]:
+        """Render an Azure Q-in-Q EVPN circuit endpoint."""
+        template = self.env.get_template("arista_eos/azure_evpn.j2")
+        rendered = template.render(**self._azure_context(interface, azure))
+        return [line for line in rendered.split("\n") if line.strip()]
+
+    def render_azure_evpn_delete(
+        self, interface: Interface, azure: AzureEvpn
+    ) -> List[str]:
+        """Render the delete for an Azure Q-in-Q EVPN circuit endpoint."""
+        template = self.env.get_template("arista_eos/azure_evpn_delete.j2")
+        rendered = template.render(**self._azure_context(interface, azure))
         return [line for line in rendered.split("\n") if line.strip()]
 
     def render_vlan(self, interface: Interface, vlan: Vlan) -> List[str]:

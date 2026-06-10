@@ -13,9 +13,10 @@ import sys
 
 from netauto.drivers import AristaDriver, OcnosDriver
 from netauto.evpn import EvpnManager
-from netauto.models import Asn, Evpn, Interface, RoutingInstance, Vlan
+from netauto.models import Asn, AzureEvpn, Evpn, Interface, RoutingInstance, Vlan
 
 TERACO_ASN = 37195
+AZURE_RT = 37186
 
 
 def pick_unused(config_text: str, candidates, token_fmt):
@@ -127,6 +128,98 @@ def run_ocnos():
     driver.disconnect()
 
 
+def _azure_ri(key, asn):
+    return RoutingInstance(
+        instance_name=key, instance_type="mac-vrf",
+        rd=f"{asn}:{key[2:]}", rt_rd=f"{AZURE_RT}:{key[2:]}",
+    )
+
+
+def _cycle_azure(driver, mgr, interface, azure, checks, restore=None):
+    print(f"\n== Azure {azure.role}"
+          f"{' (rewrite)' if azure.rewrite else ''} on {interface}: "
+          f"s_tag={azure.s_tag} c_tags={azure.c_tags} vni={azure.vni}")
+    created = False
+    try:
+        print("-- CREATE --")
+        mgr.create_azure_circuit(interface, azure, routing_instance=_azure_ri(azure.description, azure.asn))
+        created = True
+        after = driver.get_config()
+        for label, token in checks.items():
+            print(f"  [{'OK' if token in after else 'MISSING'}] {label}")
+    except Exception as e:
+        msg = str(e).splitlines()[0]
+        print(f"  [UNSUPPORTED/ERROR] {msg}")
+    finally:
+        print("-- DELETE (cleanup) --")
+        try:
+            mgr.delete_azure_circuit(interface, azure, routing_instance=_azure_ri(azure.description, azure.asn), delete_vrf=True)
+        except Exception as e:
+            print(f"  delete note: {str(e).splitlines()[0]}")
+        if restore:
+            driver.push_config(restore)
+        final = driver.get_config()
+        print(f"  removed: {azure.description not in final and str(azure.vni) not in final}")
+
+
+def run_arista_azure():
+    host, interface, asn = "172.20.30.4", "Ethernet6", 65001
+    driver = AristaDriver(host=host, user="admin", password="admin", enable_password="admin")
+    driver.connect()
+    cfg = driver.get_config()
+    s_tag = pick_unused(cfg, range(3700, 3799), lambda v: f"vlan {v} ")
+    vni = pick_unused(cfg, range(39700, 39799), lambda v: f"vni {v}")
+    internal = pick_unused(cfg, range(3800, 3899), lambda v: f"vlan {v} ")
+    print(f"== ar1 ({host}) Azure tests on {interface}")
+
+    # customer: 3 C-TAGs tunneled into the S-TAG
+    cust = AzureEvpn(description=f"SO{vni}", asn=asn, vni=vni, s_tag=s_tag,
+                     role="customer", c_tags=[11, 21, 31])
+    _cycle_azure(driver, EvpnManager(driver), interface, cust, {
+        f"dot1q-tunnel 11->{s_tag}": f"switchport vlan translation 11 dot1q-tunnel {s_tag}",
+        f"vxlan vlan {s_tag}": f"vxlan vlan {s_tag} vni {vni}",
+    }, restore=[f"default interface {interface}"])
+
+    # cni rewrite: Azure S-TAG translated to an internal S-TAG
+    cni = AzureEvpn(description=f"SO{vni}", asn=asn, vni=vni, s_tag=s_tag,
+                    role="cni", rewrite=True, internal_s_tag=internal)
+    _cycle_azure(driver, EvpnManager(driver), interface, cni, {
+        f"translation {s_tag}->{internal}": f"switchport vlan translation {s_tag} {internal}",
+        f"vxlan vlan {internal}": f"vxlan vlan {internal} vni {vni}",
+    }, restore=[f"default interface {interface}"])
+    driver.disconnect()
+
+
+def run_ocnos_azure():
+    host, interface, asn = "172.20.30.6", "eth4", 65003
+    driver = OcnosDriver(host=host, user="admin", password="admin@123")
+    driver.connect()
+    existing = set(driver.get_vnis())
+    vni = next(v for v in range(39700, 39799) if v not in existing)
+    s_tag = 3750
+    print(f"== ipi1 ({host}) Azure tests on {interface}")
+
+    cust = AzureEvpn(description=f"SO{vni}", asn=asn, vni=vni, s_tag=s_tag,
+                     role="customer", c_tags=[12, 22])
+    _cycle_azure(driver, EvpnManager(driver), interface, cust, {
+        f"sub-if {interface}.12": f"{interface}.12",
+        "push s_tag": str(s_tag),
+    })
+
+    cni = AzureEvpn(description=f"SO{vni}", asn=asn, vni=vni, s_tag=s_tag,
+                    role="cni", rewrite=True)
+    _cycle_azure(driver, EvpnManager(driver), interface, cni, {
+        f"sub-if {interface}.{s_tag}": f"{interface}.{s_tag}",
+        "arp-cache disable": "arp-cache",
+    })
+    driver.disconnect()
+
+
 if __name__ == "__main__":
     target = sys.argv[1] if len(sys.argv) > 1 else "arista"
-    {"arista": run_arista, "ocnos": run_ocnos}[target]()
+    {
+        "arista": run_arista,
+        "ocnos": run_ocnos,
+        "arista-azure": run_arista_azure,
+        "ocnos-azure": run_ocnos_azure,
+    }[target]()

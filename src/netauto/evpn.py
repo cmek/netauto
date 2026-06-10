@@ -1,7 +1,7 @@
 import logging
 from typing import List, Optional
 
-from .models import Asn, Evpn, Interface, RoutingInstance
+from .models import Asn, AzureEvpn, Evpn, Interface, RoutingInstance
 from .drivers import DeviceDriver
 from .exceptions import NetAutoException
 from .logic import _as_interface_map
@@ -43,7 +43,7 @@ class EvpnManager:
             )
         return interface
 
-    def _require_vni_free(self, evpn: Evpn) -> None:
+    def _require_vni_free(self, vni: int) -> None:
         """The VNI must not already be mapped on this device.
 
         VNIs are allocated by an external process; this is a safety check that
@@ -51,12 +51,12 @@ class EvpnManager:
         """
         # get_vnis() is a dict (Arista: vni -> {vlan_id}) or a list (OcNOS).
         existing = self.driver.get_vnis()
-        if evpn.vni in existing:
+        if vni in existing:
             detail = ""
             if isinstance(existing, dict):
-                mapped = existing[evpn.vni] or {}
+                mapped = existing[vni] or {}
                 detail = f" (mapped to VLAN {mapped.get('vlan_id', 'unknown')})"
-            raise NetAutoException(f"VNI {evpn.vni} is already in use{detail}")
+            raise NetAutoException(f"VNI {vni} is already in use{detail}")
 
     def create_circuit(
         self,
@@ -81,7 +81,7 @@ class EvpnManager:
         block is otherwise swallowed as a bundle member).
         """
         self._require_interface(interface_name)
-        self._require_vni_free(evpn)
+        self._require_vni_free(evpn.vni)
 
         interface = Interface(name=interface_name)
         diffs: List[str] = []
@@ -170,6 +170,113 @@ class EvpnManager:
                     self._normalise(
                         self.driver.renderer.render_routing_instance_delete(
                             asn or Asn(asn=evpn.asn), routing_instance
+                        )
+                    ),
+                    dry_run=dry_run,
+                )
+            )
+
+        return "\n".join(d for d in diffs if d)
+
+    def create_azure_circuit(
+        self,
+        interface_name: str,
+        azure: AzureEvpn,
+        routing_instance: Optional[RoutingInstance] = None,
+        asn: Optional[Asn] = None,
+        create_vrf: bool = True,
+        dry_run: bool = False,
+    ) -> str:
+        """Provision one Azure Q-in-Q EVPN circuit endpoint on ``interface_name``.
+
+        Same per-device contract and two-transaction (VRF then circuit) flow as
+        :meth:`create_circuit`. Configure the customer side (``role="customer"``,
+        1-3 ``c_tags``) and each CNI side (``role="cni"``) with separate calls;
+        the orchestrator drives the mandatory dual CNI (one call + VNI per CNI).
+        """
+        self._require_interface(interface_name)
+        self._require_vni_free(azure.vni)
+
+        interface = Interface(name=interface_name)
+        diffs: List[str] = []
+
+        if create_vrf:
+            if routing_instance is None:
+                raise NetAutoException(
+                    "routing_instance is required when create_vrf=True"
+                )
+            if routing_instance.instance_name != azure.description:
+                raise NetAutoException(
+                    "routing_instance.instance_name "
+                    f"({routing_instance.instance_name!r}) must match "
+                    f"azure.description ({azure.description!r})."
+                )
+            diffs.append(
+                self.driver.push_config(
+                    self._normalise(
+                        self.driver.renderer.render_routing_instance(
+                            asn or Asn(asn=azure.asn), routing_instance
+                        )
+                    ),
+                    dry_run=dry_run,
+                )
+            )
+
+        logger.info(
+            "creating Azure %s EVPN circuit on %s (vni %s, s_tag %s, c_tags %s)",
+            azure.role,
+            interface_name,
+            azure.vni,
+            azure.s_tag,
+            azure.c_tags,
+        )
+        diffs.append(
+            self.driver.push_config(
+                self._normalise(
+                    self.driver.renderer.render_azure_evpn(interface, azure)
+                ),
+                dry_run=dry_run,
+            )
+        )
+        return "\n".join(d for d in diffs if d)
+
+    def delete_azure_circuit(
+        self,
+        interface_name: str,
+        azure: AzureEvpn,
+        routing_instance: Optional[RoutingInstance] = None,
+        asn: Optional[Asn] = None,
+        delete_vrf: bool = False,
+        dry_run: bool = False,
+    ) -> str:
+        """Tear down one Azure Q-in-Q EVPN circuit endpoint."""
+        interface = Interface(name=interface_name)
+
+        logger.info(
+            "deleting Azure %s EVPN circuit on %s (vni %s)",
+            azure.role,
+            interface_name,
+            azure.vni,
+        )
+        diffs: List[str] = [
+            self.driver.push_config(
+                self._normalise(
+                    self.driver.renderer.render_azure_evpn_delete(interface, azure)
+                ),
+                dry_run=dry_run,
+            )
+        ]
+
+        if delete_vrf:
+            if routing_instance is None:
+                raise NetAutoException(
+                    "routing_instance is required when delete_vrf=True"
+                )
+            diffs.append(
+                self.driver.push_config(
+                    self._normalise(
+                        self.driver.renderer.render_routing_instance_delete(
+                            asn or Asn(asn=azure.asn), routing_instance
                         )
                     ),
                     dry_run=dry_run,

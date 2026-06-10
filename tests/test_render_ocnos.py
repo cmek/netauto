@@ -1,6 +1,6 @@
 import pytest
 from netauto.render.ocnos import OcnosDeviceRenderer
-from netauto.models import Evpn, Vlan, Interface, Lag, RoutingInstance, Asn
+from netauto.models import Evpn, Vlan, Interface, Lag, RoutingInstance, Asn, AzureEvpn
 
 
 class TestOcnosDeviceRenderer:
@@ -423,6 +423,45 @@ class TestOcnosDeviceRenderer:
             # basic single-tag circuit: no rewrite
             assert "<ifext:rewrite>" not in xml
             assert "<ifext:single-tag-vlan-matches>" in xml
+
+    def test_render_azure_customer_multi_ctag(self):
+        """One sub-interface per C-TAG, each pushing the outer S-TAG; the
+        containers are coalesced (one <if:interfaces>, one <ethvpn:evpn>)."""
+        xml = self.renderer.render_azure_evpn(
+            Interface(name="eth4"),
+            AzureEvpn(
+                description="SO555", asn=65001, vni=6000, s_tag=500,
+                role="customer", c_tags=[10, 20, 30],
+            ),
+        )
+        assert xml.count("<if:interfaces>") == 1
+        assert xml.count("<if:interface>") == 3
+        assert xml.count("<ethvpn:evpn>") == 1
+        assert xml.count("<ethvpn:interfaces>") == 1
+        # each sub-interface pushes the S-TAG and maps to the VNI
+        assert xml.count("<ifext:push-outer-vlan-id>500</ifext:push-outer-vlan-id>") == 3
+        for c in ("eth4.10", "eth4.20", "eth4.30"):
+            assert f"<if:name>{c}</if:name>" in xml
+        assert "<vxlan:vxlan-identifier>6000</vxlan:vxlan-identifier>" in xml
+
+    def test_render_azure_cni_standard_no_rewrite(self):
+        xml = self.renderer.render_azure_evpn(
+            Interface(name="eth4"),
+            AzureEvpn(description="SO555", asn=65001, vni=6000, s_tag=500, role="cni"),
+        )
+        assert "<if:name>eth4.500</if:name>" in xml
+        assert "<ifext:rewrite>" not in xml
+        assert "<ethvpn:arp-cache-disable" not in xml
+
+    def test_render_azure_cni_rewrite_pops_and_disables_caches(self):
+        xml = self.renderer.render_azure_evpn(
+            Interface(name="eth4"),
+            AzureEvpn(description="SO555", asn=65001, vni=6000, s_tag=500,
+                      role="cni", rewrite=True),
+        )
+        assert "<ifext:vlan-action>pop</ifext:vlan-action>" in xml
+        assert "<ethvpn:arp-cache-disable" in xml
+        assert "<ethvpn:nd-cache-disable" in xml
 
     def test_render_evpn_delete(self):
         """Test rendering evpn config"""

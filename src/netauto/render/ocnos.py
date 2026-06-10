@@ -2,7 +2,7 @@ from .base import DeviceRenderer
 import xml.etree.ElementTree as ET
 import xml.dom.minidom
 from typing import List, Optional
-from netauto.models import Interface, Lag, Vlan, Evpn, Asn, RoutingInstance
+from netauto.models import Interface, Lag, Vlan, Evpn, Asn, RoutingInstance, AzureEvpn
 
 
 class OcnosDeviceRenderer(DeviceRenderer):
@@ -38,6 +38,29 @@ class OcnosDeviceRenderer(DeviceRenderer):
     def _config_root(self) -> ET.Element:
         """Create the root <config> element for OcNOS XML configuration."""
         return ET.Element("config")
+
+    def _merge_containers(self, parent: ET.Element, *tags: str) -> ET.Element:
+        """Coalesce repeated sibling *container* elements into the first.
+
+        Helpers like _append_vlan each wrap their result in its own
+        ``<if:interfaces>`` / ``<ethvpn:evpn>`` container, so rendering several
+        (e.g. one per Azure C-TAG) yields duplicate containers. YANG containers
+        must appear once, so reparent the duplicates' children into the first
+        occurrence and drop the empties. List entries inside (``<if:interface>``,
+        ``<ethvpn:interface>``) are untouched — they legitimately repeat.
+        """
+        for tag in tags:
+            first: ET.Element | None = None
+            for child in list(parent):
+                if child.tag != self._tag(*tag):
+                    continue
+                if first is None:
+                    first = child
+                else:
+                    for sub in list(child):
+                        first.append(sub)
+                    parent.remove(child)
+        return parent
 
         #    def _append_interface_system_mac(self, interface: Lag) -> ET.Element:
         # ET.SubElement(
@@ -279,7 +302,9 @@ class OcnosDeviceRenderer(DeviceRenderer):
         cfg = self._append_vlan(config, interface, vlan, from_azure)
         return self._tostring(cfg)
 
-    def _append_vxlan_tenant(self, root: ET.Element, evpn: Evpn) -> ET.Element:
+    def _append_vxlan_tenant(
+        self, root: ET.Element, vni: int, vrf_name: str
+    ) -> ET.Element:
         """
         <vxlan xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-vxlan">
           <global>
@@ -301,30 +326,24 @@ class OcnosDeviceRenderer(DeviceRenderer):
         vxlan = ET.SubElement(root, self._tag("vxlan", "vxlan"))
         tenants = ET.SubElement(vxlan, self._tag("vxlan", "vxlan-tenants"))
         tenant = ET.SubElement(tenants, self._tag("vxlan", "vxlan-tenant"))
-        ET.SubElement(tenant, self._tag("vxlan", "vxlan-identifier")).text = str(
-            evpn.vni
-        )
+        ET.SubElement(tenant, self._tag("vxlan", "vxlan-identifier")).text = str(vni)
         tenant_config = ET.SubElement(tenant, self._tag("vxlan", "config"))
         ET.SubElement(tenant_config, self._tag("vxlan", "vxlan-identifier")).text = str(
-            evpn.vni
+            vni
         )
         ET.SubElement(
             tenant_config, self._tag("vxlan", "tenant-type")
         ).text = "ingress-replication"
-        ET.SubElement(
-            tenant_config, self._tag("vxlan", "vrf-name")
-        ).text = evpn.description
+        ET.SubElement(tenant_config, self._tag("vxlan", "vrf-name")).text = vrf_name
         return root
 
-    def _append_vxlan_tenant_delete(self, root: ET.Element, evpn: Evpn) -> ET.Element:
+    def _append_vxlan_tenant_delete(self, root: ET.Element, vni: int) -> ET.Element:
         """ """
         vxlan = ET.SubElement(root, self._tag("vxlan", "vxlan"))
         tenants = ET.SubElement(vxlan, self._tag("vxlan", "vxlan-tenants"))
         tenant = ET.SubElement(tenants, self._tag("vxlan", "vxlan-tenant"))
         tenant.set(self._tag("nc", "operation"), "delete")
-        ET.SubElement(tenant, self._tag("vxlan", "vxlan-identifier")).text = str(
-            evpn.vni
-        )
+        ET.SubElement(tenant, self._tag("vxlan", "vxlan-identifier")).text = str(vni)
         # tenant_config = ET.SubElement(tenant, self._tag("vxlan", "config"))
         # ET.SubElement(tenant_config, self._tag("vxlan", "vxlan-identifier")).text = str(
         #    evpn.vni
@@ -718,8 +737,79 @@ class OcnosDeviceRenderer(DeviceRenderer):
         config = self._append_ethernet_vpn_access(
             config, f"{interface.name}.{evpn.vlan.vlan_id}", evpn.vni
         )
-        config = self._append_vxlan_tenant(config, evpn)
+        config = self._append_vxlan_tenant(config, evpn.vni, evpn.description)
 
+        return self._tostring(config)
+
+    def render_azure_evpn(self, interface: Interface, azure: AzureEvpn) -> str:
+        """Render an Azure Q-in-Q EVPN circuit endpoint (VXLAN, NETCONF).
+
+        Customer side: one dot1q sub-interface per C-TAG, each pushing the outer
+        S-TAG (``rewrite push dot1q <s_tag>``) and bound to the VNI. CNI side: a
+        single sub-interface on the S-TAG; on a rewrite (conflict) it pops the
+        S-TAG and disables arp/nd caching. ``_append_vlan`` already emits the
+        push (when the Vlan carries an s_tag) / pop (no s_tag) / plain encap.
+        """
+        config = self._config_root()
+
+        if azure.role == "customer":
+            for c_tag in azure.c_tags:
+                sub_vlan = Vlan(
+                    vlan_id=c_tag, name=azure.description, s_tag=azure.s_tag
+                )
+                config = self._append_vlan(
+                    config, interface, sub_vlan, include_rewrite=True
+                )
+                config = self._append_ethernet_vpn_access(
+                    config, f"{interface.name}.{c_tag}", azure.vni
+                )
+        else:  # cni — keyed on the S-TAG; C-TAGs are encapsulated
+            sub_vlan = Vlan(vlan_id=azure.s_tag, name=azure.description)
+            # rewrite=True -> `rewrite pop` (Vlan has no s_tag, so _append_vlan
+            # emits a pop); rewrite=False -> plain `encapsulation dot1q <s_tag>`.
+            config = self._append_vlan(
+                config, interface, sub_vlan, include_rewrite=azure.rewrite
+            )
+            config = self._append_ethernet_vpn_access(
+                config,
+                f"{interface.name}.{azure.s_tag}",
+                azure.vni,
+                include_arp_cache_disable=azure.rewrite,
+                include_nd_cache_disable=azure.rewrite,
+            )
+
+        config = self._append_vxlan_tenant(config, azure.vni, azure.description)
+        self._coalesce_evpn_containers(config)
+        return self._tostring(config)
+
+    def _coalesce_evpn_containers(self, config: ET.Element) -> None:
+        """Fold the per-sub-interface containers into one each (see
+        _merge_containers). Multiple C-TAGs would otherwise emit a separate
+        <if:interfaces>/<ethvpn:evpn> per tag."""
+        self._merge_containers(config, ("if", "interfaces"), ("ethvpn", "evpn"))
+        evpn = config.find(self._tag("ethvpn", "evpn"))
+        if evpn is not None:
+            self._merge_containers(evpn, ("ethvpn", "interfaces"))
+
+    def render_azure_evpn_delete(
+        self, interface: Interface, azure: AzureEvpn
+    ) -> str:
+        """Render the delete for an Azure Q-in-Q EVPN circuit endpoint."""
+        config = self._config_root()
+
+        if azure.role == "customer":
+            sub_vlans = azure.c_tags
+        else:
+            sub_vlans = [azure.s_tag]
+
+        for sub in sub_vlans:
+            config = self._append_vlan_delete(config, interface, Vlan(vlan_id=sub))
+            config = self._append_ethernet_vpn_access_delete(
+                config, f"{interface.name}.{sub}"
+            )
+
+        config = self._append_vxlan_tenant_delete(config, azure.vni)
+        self._coalesce_evpn_containers(config)
         return self._tostring(config)
 
     def _append_azure_cni_interface(
@@ -926,7 +1016,7 @@ class OcnosDeviceRenderer(DeviceRenderer):
         config = self._append_ethernet_vpn_access_delete(
             config, f"{interface.name}.{evpn.vlan.vlan_id}"
         )
-        config = self._append_vxlan_tenant_delete(config, evpn)
+        config = self._append_vxlan_tenant_delete(config, evpn.vni)
 
         return self._tostring(config)
 

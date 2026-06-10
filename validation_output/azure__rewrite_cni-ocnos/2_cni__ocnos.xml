@@ -1,0 +1,100 @@
+<?xml version="1.0" ?>
+<config xmlns:bgpvrf="http://www.ipinfusion.com/yang/ocnos/ipi-bgp-vrf" xmlns:netinst="http://www.ipinfusion.com/yang/ocnos/ipi-network-instance" xmlns:vrf="http://www.ipinfusion.com/yang/ocnos/ipi-vrf">
+  <netinst:network-instances>
+    <netinst:network-instance>
+      <netinst:instance-name>SO303034</netinst:instance-name>
+      <netinst:instance-type>mac-vrf</netinst:instance-type>
+      <netinst:config>
+        <netinst:instance-name>SO303034</netinst:instance-name>
+        <netinst:instance-type>mac-vrf</netinst:instance-type>
+      </netinst:config>
+      <vrf:vrf>
+        <vrf:config>
+          <vrf:vrf-name>SO303034</vrf:vrf-name>
+        </vrf:config>
+        <bgpvrf:bgp-vrf>
+          <bgpvrf:config>
+            <bgpvrf:rd-string>65010:303034</bgpvrf:rd-string>
+          </bgpvrf:config>
+          <bgpvrf:route-targets>
+            <bgpvrf:route-target>
+              <bgpvrf:rt-rd-string>37186:303034</bgpvrf:rt-rd-string>
+              <bgpvrf:config>
+                <bgpvrf:rt-rd-string>37186:303034</bgpvrf:rt-rd-string>
+                <bgpvrf:direction>import export</bgpvrf:direction>
+              </bgpvrf:config>
+            </bgpvrf:route-target>
+          </bgpvrf:route-targets>
+        </bgpvrf:bgp-vrf>
+      </vrf:vrf>
+    </netinst:network-instance>
+  </netinst:network-instances>
+</config>
+
+<?xml version="1.0" ?>
+<config xmlns:ethvpn="http://www.ipinfusion.com/yang/ocnos/ipi-ethernet-vpn" xmlns:if="http://www.ipinfusion.com/yang/ocnos/ipi-interface" xmlns:ifext="http://www.ipinfusion.com/yang/ocnos/ipi-if-extended" xmlns:vxlan="http://www.ipinfusion.com/yang/ocnos/ipi-vxlan">
+  <if:interfaces>
+    <if:interface>
+      <if:name>eth4.704</if:name>
+      <if:config>
+        <if:mtu>1500</if:mtu>
+        <if:description>SO303034</if:description>
+        <if:name>eth4.704</if:name>
+        <if:enable-switchport/>
+      </if:config>
+      <ifext:extended>
+        <ifext:subinterface-encapsulation>
+          <ifext:rewrite>
+            <ifext:config>
+              <ifext:vlan-action>pop</ifext:vlan-action>
+              <ifext:enable-pop>1tag</ifext:enable-pop>
+            </ifext:config>
+          </ifext:rewrite>
+          <ifext:single-tag-vlan-matches>
+            <ifext:single-tag-vlan-match>
+              <ifext:encapsulation-type>dot1q</ifext:encapsulation-type>
+              <ifext:config>
+                <ifext:encapsulation-type>dot1q</ifext:encapsulation-type>
+                <ifext:outer-vlan-id>704</ifext:outer-vlan-id>
+              </ifext:config>
+            </ifext:single-tag-vlan-match>
+          </ifext:single-tag-vlan-matches>
+        </ifext:subinterface-encapsulation>
+      </ifext:extended>
+    </if:interface>
+  </if:interfaces>
+  <ethvpn:evpn>
+    <ethvpn:interfaces>
+      <ethvpn:interface>
+        <ethvpn:name>eth4.704</ethvpn:name>
+        <ethvpn:config>
+          <ethvpn:name>eth4.704</ethvpn:name>
+        </ethvpn:config>
+        <ethvpn:access-interfaces>
+          <ethvpn:access-interface>
+            <ethvpn:access-if>access-if-evpn</ethvpn:access-if>
+            <ethvpn:config>
+              <ethvpn:access-if>access-if-evpn</ethvpn:access-if>
+              <ethvpn:evpn-identifier>7004</ethvpn:evpn-identifier>
+              <ethvpn:arp-cache-disable/>
+              <ethvpn:nd-cache-disable/>
+            </ethvpn:config>
+          </ethvpn:access-interface>
+        </ethvpn:access-interfaces>
+      </ethvpn:interface>
+    </ethvpn:interfaces>
+  </ethvpn:evpn>
+  <vxlan:vxlan>
+    <vxlan:vxlan-tenants>
+      <vxlan:vxlan-tenant>
+        <vxlan:vxlan-identifier>7004</vxlan:vxlan-identifier>
+        <vxlan:config>
+          <vxlan:vxlan-identifier>7004</vxlan:vxlan-identifier>
+          <vxlan:tenant-type>ingress-replication</vxlan:tenant-type>
+          <vxlan:vrf-name>SO303034</vxlan:vrf-name>
+        </vxlan:config>
+      </vxlan:vxlan-tenant>
+    </vxlan:vxlan-tenants>
+  </vxlan:vxlan>
+</config>
+
