@@ -1,19 +1,28 @@
 import logging
-from typing import List, Set
-from .models import Interface, Lag
+from typing import Dict, List, Optional
+from .models import Interface, Lag, Vlan
 from .drivers import DeviceDriver
-from .renderer import TemplateRenderer
 from .exceptions import NetAutoException
 
 logger = logging.getLogger(__name__)
+
+
+def _as_interface_map(interfaces) -> Dict[str, Interface]:
+    """Drivers return either a dict (Mock) or a list (real) of interfaces.
+
+    Normalise to a name -> Interface mapping so callers don't have to care.
+    """
+    if isinstance(interfaces, dict):
+        return interfaces
+    return {intf.name: intf for intf in interfaces}
 
 
 class InterfaceManager:
     def __init__(self, driver: DeviceDriver, name: str):
         self.driver = driver
         self.name = name
-        self.renderer = TemplateRenderer()
-        interfaces = driver.get_interfaces()
+        self.renderer = driver.renderer
+        interfaces = _as_interface_map(driver.get_interfaces())
         self.interface = interfaces.get(name, None)
         if self.interface is None:
             raise NetAutoException(f"Interface {name} not found")
@@ -34,87 +43,149 @@ class InterfaceManager:
     def mtu(self, mtu):
         self.interface.mtu = mtu
 
-    def apply(self):
-        """applies current configuration"""
-        commands = self.renderer.render_interface(self.driver.platform, self.interface)
+    def apply(self, dry_run: bool = False):
+        """Render and push the current interface configuration."""
+        rendered = self.renderer.render_interface(self.interface)
+        commands = rendered if isinstance(rendered, list) else [rendered]
         logger.info(f"interface commands: {commands}")
-        response = self.driver.push_config(commands)
-        return commands
+        return self.driver.push_config(commands, dry_run=dry_run)
 
 
 class LagManager:
+    """Building blocks for single-switch LAG create/delete on Arista and OcNOS.
+
+    Two layers are available:
+      * ``driver.push_lag(Lag, delete=...)`` — the low-level primitive, when the
+        caller already has a fully-formed ``Lag`` model.
+      * ``LagManager.create_lag(name, ports)`` / ``delete_lag(name, ports)`` —
+        port-list helpers that read device state, build the ``Lag`` and push it.
+
+    No MLAG support — these are single-switch aggregates only.
+    """
+
     def __init__(self, driver: DeviceDriver):
         self.driver = driver
-        self.renderer = TemplateRenderer()
+
+    def _collect_vlans(
+        self, switchports: Dict[str, Interface], member_ports: List[str]
+    ) -> tuple[str, List[Vlan], Optional[int]]:
+        """Derive the LAG's switchport mode + VLANs from its member ports.
+
+        Trunk wins over access if members are mixed. Trunk VLANs are de-duped
+        while preserving order.
+        """
+        mode = "access"
+        trunk_vlans: List[Vlan] = []
+        access_vlan: Optional[int] = None
+        seen: set[int] = set()
+
+        for port in member_ports:
+            sp = switchports.get(port)
+            if sp is None:
+                continue
+            if sp.mode == "trunk":
+                mode = "trunk"
+                for vlan in sp.trunk_vlans:
+                    if vlan.vlan_id not in seen:
+                        seen.add(vlan.vlan_id)
+                        trunk_vlans.append(vlan)
+            elif sp.mode == "access" and sp.access_vlan and mode != "trunk":
+                access_vlan = sp.access_vlan
+
+        return mode, trunk_vlans, access_vlan
 
     def create_lag(
-        self, lag_name: str, member_ports: List[str], lacp_mode: str = "active"
-    ) -> List[str]:
-        """
-        Creates a LAG, migrating VLANs from member ports if they exist.
-        Returns a list of commands to execute.
-        """
-        # 1. Get current state
-        current_interfaces = self.driver.get_interfaces()
+        self,
+        lag_name: str,
+        member_ports: List[str],
+        lacp_mode: str = "active",
+        description: Optional[str] = None,
+        migrate_vlans: bool = True,
+        dry_run: bool = False,
+    ) -> str:
+        """Bundle ``member_ports`` into ``lag_name``.
 
-        # 2. Validation
+        When ``migrate_vlans`` is set, VLAN configuration found on the member
+        ports is moved onto the LAG (Arista: switchport config on the
+        Port-Channel; OcNOS: dot1q sub-interfaces are recreated on the ``po``
+        and removed from the members).
+
+        Returns the configuration diff (or the intended change in dry-run).
+        """
+        # Existence is checked against the full interface inventory: a routed
+        # (L3) port exists on the device but won't appear in get_switchports(),
+        # which only reports L2 switchports.
+        inventory = _as_interface_map(self.driver.get_interfaces())
+        switchports = _as_interface_map(self.driver.get_switchports())
+
         for port in member_ports:
-            if port not in current_interfaces:
-                raise ValueError(f"Port {port} does not exist on device.")
-            if current_interfaces[port].lag_member_of:
-                raise ValueError(
-                    f"Port {port} is already a member of {current_interfaces[port].lag_member_of}"
+            if port not in inventory and port not in switchports:
+                raise NetAutoException(f"Port {port} does not exist on device.")
+            member_of = (
+                getattr(inventory.get(port), "lag_member_of", None)
+                or getattr(switchports.get(port), "lag_member_of", None)
+            )
+            if member_of:
+                raise NetAutoException(
+                    f"Port {port} is already a member of {member_of}"
                 )
 
-        # 3. Collect VLANs to migrate
-        vlans_to_migrate: Set[int] = set()
-        for port in member_ports:
-            interface = current_interfaces[port]
-            if interface.mode == "trunk":
-                vlans_to_migrate.update(interface.trunk_vlans)
-            elif interface.mode == "access" and interface.access_vlan:
-                vlans_to_migrate.add(interface.access_vlan)
+        members = [Interface(name=p) for p in member_ports]
+        lag = Lag(
+            name=lag_name,
+            description=description,
+            lacp_mode=lacp_mode,
+            members=members,
+            mtu=None,  # don't impose a default MTU; device keeps its own
+        )
 
-        logger.debug(f"Found VLANs to migrate: {vlans_to_migrate}")
+        mode, trunk_vlans, access_vlan = ("access", [], None)
+        if migrate_vlans:
+            mode, trunk_vlans, access_vlan = self._collect_vlans(
+                switchports, member_ports
+            )
 
-        # 4. Extract LAG number from name (e.g., "po10" -> 10)
-        lag_number = int(lag_name.replace(self.driver.lag_prefix, ""))
+        # Arista models L2 VLANs as switchport config on the Port-Channel, so we
+        # carry them on the Lag model and let the renderer emit them inline.
+        if self.driver.platform != "ipinfusion_ocnos":
+            if migrate_vlans and mode == "trunk" and trunk_vlans:
+                lag.mode = "trunk"
+                lag.trunk_vlans = trunk_vlans
+            elif migrate_vlans and access_vlan:
+                lag.mode = "access"
+                lag.access_vlan = access_vlan
+            logger.info("creating LAG %s with members %s", lag_name, member_ports)
+            return self.driver.push_lag(lag, dry_run=dry_run)
 
-        # 5. Prepare context for template
-        context = {
-            "lag_name": lag_name,
-            "lag_number": lag_number,
-            "members": member_ports,
-            "vlans": sorted(vlans_to_migrate),
-            "lacp_mode": lacp_mode,
-            "has_vlans": bool(vlans_to_migrate),
-        }
+        # OcNOS-SP models L2 VLANs as dot1q sub-interfaces. Build one atomic
+        # payload list: the bundle, then move each member's sub-interfaces onto
+        # the po. create_parent_agg=True instantiates the aggregator so the
+        # members' aggregate-id reference resolves.
+        commands: List[str] = [
+            self.driver.renderer.render_lag(lag, create_parent_agg=True)
+        ]
+        if migrate_vlans:
+            for port in member_ports:
+                sp = switchports.get(port)
+                for vlan in (sp.trunk_vlans if sp else []):
+                    commands.append(self.driver.renderer.render_vlan(lag, vlan))
+                    commands.append(
+                        self.driver.renderer.render_vlan_delete(
+                            Interface(name=port), vlan
+                        )
+                    )
+        logger.info("creating LAG %s with members %s", lag_name, member_ports)
+        return self.driver.push_config(commands, dry_run=dry_run)
 
-        # 6. Render configuration using template
-        commands = self.renderer.render_lag(self.driver.platform, **context)
+    def delete_lag(
+        self, lag_name: str, member_ports: List[str], dry_run: bool = False
+    ) -> str:
+        """Tear ``lag_name`` apart, returning its members to standalone ports.
 
-        return commands
-
-    def delete_lag(self, lag_name: str, member_ports: List[str]) -> List[str]:
+        Plain split: VLANs that were migrated onto the LAG are not restored to
+        the member ports.
         """
-        Deletes a LAG configuration.
-        Returns a list of commands to execute.
-        """
-        # Extract LAG number from name
-        lag_number = int(lag_name.replace("Port-Channel", ""))
-
-        # Prepare context for template
-        context = {
-            "lag_name": lag_name,
-            "lag_number": lag_number,
-            "members": member_ports,
-        }
-
-        # Render delete configuration using template
-        commands = self.renderer.render_lag_delete(self.driver.platform, **context)
-
-        return commands
-
-    def apply(self, commands: List[str]):
-        response = self.driver.push_config(commands)
-        return response
+        members = [Interface(name=p) for p in member_ports]
+        lag = Lag(name=lag_name, members=members)
+        logger.info("deleting LAG %s (members %s)", lag_name, member_ports)
+        return self.driver.push_lag(lag, delete=True, dry_run=dry_run)

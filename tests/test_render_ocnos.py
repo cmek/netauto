@@ -39,10 +39,6 @@ class TestOcnosDeviceRenderer:
     </if:interface>
     <if:interface>
       <if:name>eth3</if:name>
-      <if:config>
-        <if:mtu>1500</if:mtu>
-        <if:description>SO3333</if:description>
-      </if:config>
       <ifagg:member-aggregation>
         <ifagg:config>
           <ifagg:agg-type>lacp</ifagg:agg-type>
@@ -53,10 +49,6 @@ class TestOcnosDeviceRenderer:
     </if:interface>
     <if:interface>
       <if:name>eth4</if:name>
-      <if:config>
-        <if:mtu>1500</if:mtu>
-        <if:description>SO4444</if:description>
-      </if:config>
       <ifagg:member-aggregation>
         <ifagg:config>
           <ifagg:agg-type>lacp</ifagg:agg-type>
@@ -64,6 +56,38 @@ class TestOcnosDeviceRenderer:
           <ifagg:lacp-mode>active</ifagg:lacp-mode>
         </ifagg:config>
       </ifagg:member-aggregation>
+    </if:interface>
+  </if:interfaces>
+</config>
+"""
+        )
+
+    def test_render_lag_delete(self):
+        """Test rendering LAG delete config for OcNOS (XML)."""
+        xml = self.renderer.render_lag_delete(
+            Lag(
+                name="po1",
+                members=[
+                    Interface(name="eth3"),
+                    Interface(name="eth4"),
+                ],
+            )
+        )
+        assert (
+            xml
+            == """<?xml version="1.0" ?>
+<config xmlns:if="http://www.ipinfusion.com/yang/ocnos/ipi-interface" xmlns:ifagg="http://www.ipinfusion.com/yang/ocnos/ipi-if-aggregate" xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <if:interfaces>
+    <if:interface>
+      <if:name>eth3</if:name>
+      <ifagg:member-aggregation nc:operation="remove"/>
+    </if:interface>
+    <if:interface>
+      <if:name>eth4</if:name>
+      <ifagg:member-aggregation nc:operation="remove"/>
+    </if:interface>
+    <if:interface nc:operation="remove">
+      <if:name>po1</if:name>
     </if:interface>
   </if:interfaces>
 </config>

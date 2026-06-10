@@ -34,6 +34,81 @@ interface Ethernet4
   exit"""
         )
 
+    def test_render_lag_with_trunk_vlans(self):
+        """LAG create migrates trunk VLANs onto the Port-Channel."""
+        cfg = self.renderer.render_lag(
+            Lag(
+                name="Port-Channel10",
+                description="SO12345",
+                lacp_mode="active",
+                mode="trunk",
+                trunk_vlans=[Vlan(vlan_id=10), Vlan(vlan_id=20)],
+                members=[
+                    Interface(name="Ethernet3"),
+                    Interface(name="Ethernet4"),
+                ],
+            )
+        )
+        assert (
+            "\n".join(cfg)
+            == """interface Port-Channel10
+  description SO12345
+  switchport
+  switchport mode trunk
+  switchport trunk allowed vlan 10,20
+interface Ethernet3
+  channel-group 10 mode active
+  exit
+interface Ethernet4
+  channel-group 10 mode active
+  exit"""
+        )
+
+    def test_render_lag_plain(self):
+        """A LAG with no VLANs/description renders just the bundle."""
+        cfg = self.renderer.render_lag(
+            Lag(
+                name="Port-Channel10",
+                lacp_mode="active",
+                members=[
+                    Interface(name="Ethernet3"),
+                    Interface(name="Ethernet4"),
+                ],
+            )
+        )
+        assert (
+            "\n".join(cfg)
+            == """interface Port-Channel10
+interface Ethernet3
+  channel-group 10 mode active
+  exit
+interface Ethernet4
+  channel-group 10 mode active
+  exit"""
+        )
+
+    def test_render_lag_delete(self):
+        """LAG delete splits members back to standalone ports (plain split)."""
+        cfg = self.renderer.render_lag_delete(
+            Lag(
+                name="Port-Channel10",
+                members=[
+                    Interface(name="Ethernet3"),
+                    Interface(name="Ethernet4"),
+                ],
+            )
+        )
+        assert (
+            "\n".join(cfg)
+            == """interface Ethernet3
+  no channel-group
+  exit
+interface Ethernet4
+  no channel-group
+  exit
+no interface Port-Channel10"""
+        )
+
     def test_render_interface(self):
         """Test rendering interface config for Arista"""
         cfg = self.renderer.render_interface(

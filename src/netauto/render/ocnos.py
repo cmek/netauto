@@ -61,12 +61,14 @@ class OcnosDeviceRenderer(DeviceRenderer):
             intf = ET.SubElement(root, self._tag("if", "interface"))
         ET.SubElement(intf, self._tag("if", "name")).text = interface.name
         intf_config = ET.SubElement(intf, self._tag("if", "config"))
-        ET.SubElement(intf_config, self._tag("if", "mtu")).text = str(interface.mtu)
+        if interface.mtu is not None:
+            ET.SubElement(intf_config, self._tag("if", "mtu")).text = str(interface.mtu)
         if create_parent_agg and isinstance(interface, Lag):
             ET.SubElement(intf_config, self._tag("if", "name")).text = interface.name
-        ET.SubElement(
-            intf_config, self._tag("if", "description")
-        ).text = interface.description
+        if interface.description is not None:
+            ET.SubElement(
+                intf_config, self._tag("if", "description")
+            ).text = interface.description
         if isinstance(interface, Lag):
             ET.SubElement(intf_config, self._tag("if", "enable-switchport"))
 
@@ -117,8 +119,9 @@ class OcnosDeviceRenderer(DeviceRenderer):
             skip_interfaces=True,
         )
         for member in lag.members:
-            # Add extra lag stuff here for some consistency
-            intf = interfaces.find
+            # Members only need their aggregation binding; pushing a full config
+            # block (mtu/description) on a port being aggregated is rejected by
+            # OcNOS ("value not in range").
             intf = ET.SubElement(interfaces, self._tag("if", "interface"))
             ET.SubElement(intf, self._tag("if", "name")).text = member.name
             agg = ET.SubElement(intf, self._tag("ifagg", "member-aggregation"))
@@ -133,9 +136,28 @@ class OcnosDeviceRenderer(DeviceRenderer):
 
         return self._tostring(config)
 
-    def render_lag_delete(self, lag: Lag) -> List[str]:
-        """Render LAG configuration commands for the given platform."""
-        pass
+    def render_lag_delete(self, lag: Lag) -> str:
+        """Render an OcNOS edit-config payload that tears a LAG apart.
+
+        Removes the member-aggregation from each member port (returning it to a
+        standalone interface) and deletes the aggregate (``po``) interface.
+        """
+        config = self._config_root()
+        interfaces = ET.SubElement(config, self._tag("if", "interfaces"))
+
+        # Use operation="remove" (not "delete") so teardown is idempotent: it
+        # won't error if the aggregation / aggregate interface is already gone.
+        for member in lag.members:
+            intf = ET.SubElement(interfaces, self._tag("if", "interface"))
+            ET.SubElement(intf, self._tag("if", "name")).text = member.name
+            agg = ET.SubElement(intf, self._tag("ifagg", "member-aggregation"))
+            agg.set(self._tag("nc", "operation"), "remove")
+
+        lag_intf = ET.SubElement(interfaces, self._tag("if", "interface"))
+        lag_intf.set(self._tag("nc", "operation"), "remove")
+        ET.SubElement(lag_intf, self._tag("if", "name")).text = lag.name
+
+        return self._tostring(config)
 
     def _append_vlan(
         self,

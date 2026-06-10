@@ -1,6 +1,14 @@
 import pytest
-from netauto.models import Interface, Vlan
+from lxml import etree
+from netauto.models import Interface, Vlan, Lag
 from netauto.drivers import MockDriver, OcnosDriver
+
+
+class _FakeReply:
+    """Minimal stand-in for an ncclient GetReply (only .data_ele is used)."""
+
+    def __init__(self, root: etree._Element):
+        self.data_ele = root
 
 
 class TestOcnosDriver:
@@ -8,15 +16,22 @@ class TestOcnosDriver:
 
     def test_ocnos_extract_interfaces(self):
         """Test interface extraction logic from ocnos netconf response."""
-        driver = OcnosDriver("127.0.0.1", "admin", "admin")
+        # Bypass __init__ so we don't open a real NETCONF connection.
+        driver = OcnosDriver.__new__(OcnosDriver)
+
         with open("tests/ocnos_interfaces.xml") as f:
             data = f.read()
 
-        interfaces = driver._extract_interfaces(data)
+        root = etree.fromstring(data.encode())
+        interfaces = driver._extract_interfaces(_FakeReply(root))
 
-        print(interfaces)
-        assert "eth0" in interfaces
-        assert "po10" in interfaces
+        by_name = {i.name: i for i in interfaces}
+        assert "eth0" in by_name
+        assert "po10" in by_name
+        # po10 is an aggregate with eth3 as a member
+        assert isinstance(by_name["po10"], Lag)
+        assert by_name["po10"].members == ["eth3"]
+        assert by_name["eth3"].lag_member_of == "po10"
 
 
 class TestMockDriver:
@@ -32,7 +47,11 @@ class TestMockDriver:
     def test_mock_driver_with_initial_interfaces(self):
         """Test MockDriver with initial interfaces."""
         interfaces = [
-            Interface(name="Ethernet1", mode="trunk", trunk_vlans=[10, 20]),
+            Interface(
+                name="Ethernet1",
+                mode="trunk",
+                trunk_vlans=[Vlan(vlan_id=10), Vlan(vlan_id=20)],
+            ),
             Interface(name="Ethernet2", mode="access", access_vlan=100),
         ]
         driver = MockDriver(initial_interfaces=interfaces)
@@ -40,7 +59,7 @@ class TestMockDriver:
         assert len(driver.interfaces) == 2
         assert "Ethernet1" in driver.interfaces
         assert "Ethernet2" in driver.interfaces
-        assert driver.interfaces["Ethernet1"].trunk_vlans == [10, 20]
+        assert [v.vlan_id for v in driver.interfaces["Ethernet1"].trunk_vlans] == [10, 20]
 
     def test_mock_driver_with_initial_vlans(self):
         """Test MockDriver with initial VLANs."""
@@ -73,6 +92,22 @@ class TestMockDriver:
         assert result == driver.vlans
         assert 100 in result
 
+    def test_get_switchports(self):
+        """Test get_switchports returns per-port switchport state."""
+        ports = [
+            Interface(
+                name="Ethernet1",
+                mode="trunk",
+                trunk_vlans=[Vlan(vlan_id=10), Vlan(vlan_id=20)],
+            ),
+            Interface(name="Ethernet2", mode="access", access_vlan=100),
+        ]
+        driver = MockDriver(initial_switchports=ports)
+
+        result = driver.get_switchports()
+        assert "Ethernet1" in result
+        assert result["Ethernet2"].access_vlan == 100
+
     def test_push_config(self):
         """Test push_config method."""
         driver = MockDriver()
@@ -82,6 +117,12 @@ class TestMockDriver:
 
         assert len(driver.pushed_commands) == 3
         assert driver.pushed_commands == commands
+
+    def test_push_config_dry_run_records_nothing(self):
+        """A dry run should not accumulate commands."""
+        driver = MockDriver()
+        driver.push_config(["interface Ethernet1"], dry_run=True)
+        assert driver.pushed_commands == []
 
     def test_push_config_multiple_times(self):
         """Test pushing config multiple times accumulates commands."""

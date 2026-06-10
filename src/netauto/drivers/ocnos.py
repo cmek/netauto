@@ -341,6 +341,16 @@ class OcnosDriver(DeviceDriver):
             for vlan in intf.trunk_vlans
         ]
 
+    def get_switchports(self) -> dict[str, Interface]:
+        """Per-port switchport state for OcNOS.
+
+        OcNOS-SP models L2 VLANs as dot1q sub-interfaces (e.g. ``eth3.100``).
+        ``_extract_interfaces`` already folds those sub-interfaces into each
+        parent interface's ``trunk_vlans``, so we expose that per-port view here
+        (keyed by interface name) for VLAN migration onto a LAG.
+        """
+        return {intf.name: intf for intf in self.get_interfaces()}
+
     def get_network_instances(self) -> list[RoutingInstance]:
         if (
             self.conn is None or not self.conn.connected

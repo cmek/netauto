@@ -39,6 +39,17 @@ class DeviceDriver(ABC):
         pass
 
     @abstractmethod
+    def get_switchports(self) -> Dict[str, Interface]:
+        """Returns a dictionary of interface name to Interface carrying its
+        switchport state (mode, access_vlan, trunk_vlans).
+
+        This is the per-port VLAN view used to migrate VLAN configuration onto a
+        LAG when bundling member ports. It is intentionally separate from
+        get_interfaces(), which only reports interface inventory.
+        """
+        pass
+
+    @abstractmethod
     def get_vnis(self) -> Dict[int, Dict[str, Any]]:
         """Returns a dictionary of VNI to VNI information (vlan_id, etc.)."""
         pass

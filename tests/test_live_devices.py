@@ -1,6 +1,7 @@
 import pytest
 import os
 from netauto.drivers import AristaDriver, OcnosDriver
+from netauto.logic import LagManager
 from netauto.models import EvpnService, Vrf
 
 # Skip tests unless explicitly enabled
@@ -9,6 +10,23 @@ ARISTA_HOST = os.getenv("ARISTA_HOST", "172.20.30.4")
 OCNOS_HOST = os.getenv("OCNOS_HOST", "172.20.30.6")
 USERNAME = os.getenv("DEVICE_USER", "admin")
 PASSWORD = os.getenv("DEVICE_PASSWORD", "admin")
+# OcNOS uses a different default password than Arista (see lab_devices.md)
+OCNOS_PASSWORD = os.getenv("OCNOS_PASSWORD", "admin@123")
+
+# Free ports to bundle/unbundle during the live LAG cycle. Override via env if
+# these aren't safe on your devices. The test creates then deletes the LAG, so
+# it is self-cleaning.
+ARISTA_LAG_NAME = os.getenv("ARISTA_LAG_NAME", "Port-Channel99")
+OCNOS_LAG_NAME = os.getenv("OCNOS_LAG_NAME", "po99")
+ARISTA_LAG_MEMBERS = os.getenv("ARISTA_LAG_MEMBERS", "Ethernet5,Ethernet6").split(",")
+OCNOS_LAG_MEMBERS = os.getenv("OCNOS_LAG_MEMBERS", "eth3,eth4").split(",")
+
+
+def _interface_names(interfaces) -> set[str]:
+    """get_interfaces() returns a list (real drivers) or dict (mock)."""
+    if isinstance(interfaces, dict):
+        return set(interfaces.keys())
+    return {intf.name for intf in interfaces}
 
 
 @pytest.mark.skipif(not RUN_LIVE_TESTS, reason="Live tests not enabled")
@@ -58,4 +76,36 @@ class TestLiveDevices:
             with pytest.raises(ValueError):
                 manager.deploy_service(service, vrf)
 
+        driver.disconnect()
+
+
+@pytest.mark.skipif(not RUN_LIVE_TESTS, reason="Live tests not enabled")
+class TestLiveLag:
+    """Full single-switch LAG build -> verify -> delete cycle (self-cleaning).
+
+    Runs against ar1 (Arista) and ipi1 (OcNOS). Uses migrate_vlans=False so the
+    test never disturbs real VLAN config on the chosen ports.
+    """
+
+    def test_arista_lag_create_delete(self):
+        driver = AristaDriver(host=ARISTA_HOST, user=USERNAME, password=PASSWORD)
+        driver.connect()
+        mgr = LagManager(driver)
+        try:
+            mgr.create_lag(ARISTA_LAG_NAME, ARISTA_LAG_MEMBERS, migrate_vlans=False)
+            assert ARISTA_LAG_NAME in _interface_names(driver.get_interfaces())
+        finally:
+            mgr.delete_lag(ARISTA_LAG_NAME, ARISTA_LAG_MEMBERS)
+        assert ARISTA_LAG_NAME not in _interface_names(driver.get_interfaces())
+        driver.disconnect()
+
+    def test_ocnos_lag_create_delete(self):
+        driver = OcnosDriver(host=OCNOS_HOST, user=USERNAME, password=OCNOS_PASSWORD)
+        mgr = LagManager(driver)
+        try:
+            mgr.create_lag(OCNOS_LAG_NAME, OCNOS_LAG_MEMBERS, migrate_vlans=False)
+            assert OCNOS_LAG_NAME in _interface_names(driver.get_interfaces())
+        finally:
+            mgr.delete_lag(OCNOS_LAG_NAME, OCNOS_LAG_MEMBERS)
+        assert OCNOS_LAG_NAME not in _interface_names(driver.get_interfaces())
         driver.disconnect()

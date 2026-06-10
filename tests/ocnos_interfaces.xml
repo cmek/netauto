@@ -1,0 +1,43 @@
+<data xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-interface">
+  <interfaces>
+    <interface>
+      <name>eth0</name>
+      <config>
+        <name>eth0</name>
+      </config>
+      <state>
+        <name>eth0</name>
+        <logical>false</logical>
+      </state>
+    </interface>
+    <interface>
+      <name>eth3</name>
+      <config>
+        <name>eth3</name>
+      </config>
+      <member-aggregation xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-if-aggregate">
+        <config>
+          <aggregate-id>10</aggregate-id>
+        </config>
+      </member-aggregation>
+      <state>
+        <name>eth3</name>
+        <logical>false</logical>
+      </state>
+    </interface>
+    <interface>
+      <name>po10</name>
+      <config>
+        <name>po10</name>
+        <enable-switchport/>
+      </config>
+      <state>
+        <name>po10</name>
+        <logical>false</logical>
+        <custom-state xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-if-extended">
+          <hardware-type>AGG</hardware-type>
+        </custom-state>
+      </state>
+    </interface>
+  </interfaces>
+</data>

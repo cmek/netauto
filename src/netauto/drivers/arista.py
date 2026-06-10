@@ -76,35 +76,48 @@ class AristaDriver(DeviceDriver):
 
         # switchports = data_sw.get("switchports", {})
 
-        interfaces = []
-        for name, intf_data in data.get("interfaces", {}).items():
-            print(intf_data)
-            mode = "routed"
-            trunk_vlans = []
-            access_vlan = None
+        raw = data.get("interfaces", {})
 
+        # Each physical port reports its aggregation via the interfaceMembership
+        # string ("Member of Port-ChannelN"); the Port-Channel's memberInterfaces
+        # only lists operationally-bundled members, so it's unreliable when the
+        # members are admin-down. Parse the per-port field instead so we can flag
+        # ports that already belong to a LAG (prevents hijacking them).
+        def _parse_membership(value: str | None) -> str | None:
+            prefix = "Member of "
+            if value and value.startswith(prefix):
+                return value[len(prefix):].strip()
+            return None
+
+        member_to_lag: Dict[str, str] = {}
+        for name, intf_data in raw.items():
+            parent = _parse_membership(intf_data.get("interfaceMembership"))
+            if parent:
+                member_to_lag[name] = parent
+
+        interfaces = []
+        for name, intf_data in raw.items():
             if name.startswith(self.lag_prefix):
-                # It's a LAG
-                members = []
-                lacp_mode = "active"  # default
-                for member_name, member_data in intf_data.get("members", {}).items():
-                    members.append(Interface(name=member_name))
-                lag = Lag(
-                    name=name,
-                    mode="routed",
-                    members=members,
-                    lacp_mode=lacp_mode,
-                    min_links=1,
+                members = [
+                    Interface(name=member_name, lag_member_of=name)
+                    for member_name, parent in member_to_lag.items()
+                    if parent == name
+                ]
+                interfaces.append(
+                    Lag(
+                        name=name,
+                        mode="routed",
+                        members=members,
+                        lacp_mode="active",
+                        min_links=1,
+                    )
                 )
-                interfaces.append(lag)
-                continue
             else:
                 interfaces.append(
                     Interface(
                         name=name,
-                        mode=mode,
-                        trunk_vlans=trunk_vlans,
-                        access_vlan=access_vlan,
+                        mode="routed",
+                        lag_member_of=member_to_lag.get(name),
                     )
                 )
 
@@ -125,6 +138,70 @@ class AristaDriver(DeviceDriver):
             vlans[vlan_id] = Vlan(vlan_id=vlan_id, name=name)
 
         return vlans
+
+    @staticmethod
+    def _parse_vlan_ranges(spec: str) -> List[int]:
+        """Expand an EOS allowed-vlan spec like '10,20,30-32' into [10,20,30,31,32].
+
+        Returns an empty list for the catch-all default ('ALL'/'1-4094') so we
+        don't migrate the entire VLAN space when bundling a default trunk.
+        """
+        if not spec:
+            return []
+        spec = spec.strip().lower()
+        if spec in {"all", "1-4094", "none", ""}:
+            return []
+        vlans: List[int] = []
+        for part in spec.split(","):
+            part = part.strip()
+            if "-" in part:
+                lo, hi = part.split("-", 1)
+                vlans.extend(range(int(lo), int(hi) + 1))
+            elif part.isdigit():
+                vlans.append(int(part))
+        return vlans
+
+    def get_switchports(self) -> Dict[str, Interface]:
+        """Per-port switchport state via 'show interfaces switchport'."""
+        try:
+            response = self.node.enable("show interfaces switchport")
+            data = response[0].get("result", {})
+        except Exception as e:
+            logger.error(f"Failed to retrieve switchports: {e}")
+            return {}
+
+        switchports: Dict[str, Interface] = {}
+        for name, entry in data.get("switchports", {}).items():
+            info = entry.get("switchportInfo", {})
+            raw_mode = info.get("mode", "")
+            if raw_mode.startswith("trunk"):
+                mode = "trunk"
+            elif raw_mode.startswith("access"):
+                mode = "access"
+            else:
+                mode = "routed"
+
+            access_vlan = None
+            if mode == "access":
+                access_vlan = info.get("accessVlanId")
+
+            trunk_vlans = []
+            if mode == "trunk":
+                trunk_vlans = [
+                    Vlan(vlan_id=v)
+                    for v in self._parse_vlan_ranges(
+                        str(info.get("trunkAllowedVlans", ""))
+                    )
+                ]
+
+            switchports[name] = Interface(
+                name=name,
+                mode=mode,
+                access_vlan=access_vlan,
+                trunk_vlans=trunk_vlans,
+            )
+
+        return switchports
 
     def get_vnis(self) -> Dict[int, Dict[str, Any]]:
         try:

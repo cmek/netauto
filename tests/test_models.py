@@ -40,9 +40,13 @@ class TestModels:
 
     def test_interface_trunk_mode(self):
         """Test Interface in trunk mode."""
-        interface = Interface(name="Ethernet1", mode="trunk", trunk_vlans=[10, 20, 30])
+        interface = Interface(
+            name="Ethernet1",
+            mode="trunk",
+            trunk_vlans=[Vlan(vlan_id=10), Vlan(vlan_id=20), Vlan(vlan_id=30)],
+        )
         assert interface.mode == "trunk"
-        assert interface.trunk_vlans == [10, 20, 30]
+        assert [v.vlan_id for v in interface.trunk_vlans] == [10, 20, 30]
 
     def test_interface_access_mode(self):
         """Test Interface in access mode."""
@@ -52,17 +56,26 @@ class TestModels:
 
     def test_lag_inherits_interface(self):
         """Test that Lag inherits from Interface."""
-        lag = Lag(name="Port-Channel1", members=["Ethernet1", "Ethernet2"])
+        lag = Lag(
+            name="Port-Channel1",
+            members=[Interface(name="Ethernet1"), Interface(name="Ethernet2")],
+        )
         assert isinstance(lag, Interface)
-        assert lag.members == ["Ethernet1", "Ethernet2"]
+        assert [m.name for m in lag.members] == ["Ethernet1", "Ethernet2"]
         assert lag.lacp_mode == "active"
         assert lag.min_links == 1
 
     def test_lag_lacp_modes(self):
         """Test LAG LACP mode validation."""
-        lag_active = Lag(name="Po1", lacp_mode="active", members=["Eth1"])
-        lag_passive = Lag(name="Po2", lacp_mode="passive", members=["Eth2"])
-        lag_static = Lag(name="Po3", lacp_mode="static", members=["Eth3"])
+        lag_active = Lag(
+            name="Po1", lacp_mode="active", members=[Interface(name="Eth1")]
+        )
+        lag_passive = Lag(
+            name="Po2", lacp_mode="passive", members=[Interface(name="Eth2")]
+        )
+        lag_static = Lag(
+            name="Po3", lacp_mode="static", members=[Interface(name="Eth3")]
+        )
 
         assert lag_active.lacp_mode == "active"
         assert lag_passive.lacp_mode == "passive"
