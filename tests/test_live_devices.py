@@ -228,6 +228,67 @@ class TestLiveAzure:
 
 
 @pytest.mark.skipif(not RUN_LIVE_TESTS, reason="Live tests not enabled")
+class TestLiveReadBack:
+    """Create -> read back -> verify -> delete (self-cleaning).
+
+    Exercises EvpnManager.get_circuits / verify_circuit against the live device:
+    a created circuit must be reconstructed from running-config / get-config and
+    match intent; after delete it must be gone.
+    """
+
+    def test_arista_readback_and_verify(self):
+        driver = AristaDriver(host=ARISTA_HOST, user=USERNAME, password=PASSWORD,
+                              enable_password=os.getenv("ARISTA_ENABLE", "admin"))
+        driver.connect()
+        cfg = driver.get_config()
+        vlan = _free_value(cfg, range(3700, 3999), lambda v: f"vlan {v} ")
+        vni = _free_value(cfg, range(39600, 39699), lambda v: f"vni {v}")
+        key = f"SO9{vni}"
+        interface = os.getenv("ARISTA_EVPN_PORT", "Ethernet6")
+        evpn = Evpn(vlan=Vlan(vlan_id=vlan, name=key), asn=ARISTA_ASN, vni=vni,
+                    description=key, service_type="cloud_vc")
+        ri = RoutingInstance(instance_name=key, instance_type="mac-vrf",
+                             rd=f"{ARISTA_ASN}:{vni}", rt_rd=f"{TERACO_ASN}:{vni}")
+        mgr = EvpnManager(driver)
+        try:
+            mgr.create_circuit(interface, evpn, routing_instance=ri)
+            found = [c for c in mgr.get_circuits() if c.evpn.vni == vni]
+            assert found, "created circuit not read back"
+            assert found[0].evpn.vlan.vlan_id == vlan
+            d = mgr.verify_circuit(interface, evpn, ri)
+            assert d.present and d.matches, d.differences
+        finally:
+            mgr.delete_circuit(interface, evpn, routing_instance=ri, delete_vrf=True)
+            driver.push_config([f"default interface {interface}"])
+        assert not mgr.verify_circuit(interface, evpn, ri).present
+        driver.disconnect()
+
+    def test_ocnos_readback_and_verify(self):
+        driver = OcnosDriver(host=OCNOS_HOST, user=USERNAME, password=OCNOS_PASSWORD)
+        driver.connect()
+        vni = next(v for v in range(39600, 39699) if v not in set(driver.get_vnis()))
+        vlan = vni - 36000
+        key = f"SO9{vni}"
+        interface = os.getenv("OCNOS_EVPN_PORT", "eth4")
+        evpn = Evpn(vlan=Vlan(vlan_id=vlan, name=key), asn=65003, vni=vni,
+                    description=key, service_type="cloud_vc")
+        ri = RoutingInstance(instance_name=key, instance_type="mac-vrf",
+                             rd=f"65003:{vni}", rt_rd=f"{TERACO_ASN}:{vni}")
+        mgr = EvpnManager(driver)
+        try:
+            mgr.create_circuit(interface, evpn, routing_instance=ri)
+            found = [c for c in mgr.get_circuits() if c.evpn.vni == vni]
+            assert found, "created circuit not read back"
+            assert found[0].interface == interface  # OcNOS binds the parent port
+            d = mgr.verify_circuit(interface, evpn, ri)
+            assert d.present and d.matches, d.differences
+        finally:
+            mgr.delete_circuit(interface, evpn, routing_instance=ri, delete_vrf=True)
+        assert not mgr.verify_circuit(interface, evpn, ri).present
+        driver.disconnect()
+
+
+@pytest.mark.skipif(not RUN_LIVE_TESTS, reason="Live tests not enabled")
 class TestLiveLag:
     """Full single-switch LAG build -> verify -> delete cycle (self-cleaning).
 

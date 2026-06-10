@@ -1,7 +1,17 @@
 import re
 from lxml import etree
 from lxml.etree import Element
-from netauto.models import Config, Asn, Evpn, Interface, Lag, RoutingInstance, Vlan
+from netauto.models import (
+    Config,
+    Asn,
+    AzureEvpn,
+    Evpn,
+    EvpnCircuit,
+    Interface,
+    Lag,
+    RoutingInstance,
+    Vlan,
+)
 from pathlib import Path
 from typing import Any, Pattern
 
@@ -457,7 +467,7 @@ class OcnosConfigParser:
         except ValueError:
             return None
 
-    def parse_config(self) -> dict[str, Any]:
+    def parse_config(self) -> Config:
         config_parts = [
             entry.strip("\n") for entry in re.split(r"^!", self.config, flags=re.M)
         ]
@@ -952,6 +962,120 @@ class OcnosConfigXMLParser:
 
         return evpns
 
+    def parse_evpn_circuits(self) -> list[EvpnCircuit]:
+        """Reconstruct EVPN circuits (incl. Azure Q-in-Q) bound to their port.
+
+        Only dot1q sub-interfaces with an EVPN access binding (``map vpn-id``)
+        are considered. The sub-interface's rewrite action classifies it:
+        ``push`` -> Azure customer (the pushed value is the S-TAG, the encap
+        VLAN is a C-TAG; sibling sub-interfaces sharing the S-TAG are grouped
+        into one AzureEvpn); ``pop`` -> Azure CNI rewrite; none -> plain Evpn.
+        """
+        ri_by_name = {ri.instance_name: ri for ri in self.parse_network_instances()}
+
+        # vni + arp/nd-cache-disable per access sub-interface (the ethvpn binding)
+        vni_by_subif: dict[str, int] = {}
+        for evpn_intf in self.config.iterfind(
+            ".//evpn:evpn/evpn:interfaces/evpn:interface", namespaces=self.ns
+        ):
+            name = evpn_intf.findtext(
+                "evpn:name", namespaces=self.ns
+            ) or evpn_intf.findtext("evpn:config/evpn:name", namespaces=self.ns)
+            vni_text = evpn_intf.findtext(
+                ".//evpn:access-interfaces//evpn:config/evpn:evpn-identifier",
+                namespaces=self.ns,
+            )
+            if name and vni_text and vni_text.isdigit():
+                vni_by_subif[name] = int(vni_text)
+
+        def _asn(ri: RoutingInstance | None) -> int:
+            if ri and ":" in ri.rd:
+                try:
+                    return int(ri.rd.split(":", 1)[0])
+                except ValueError:
+                    pass
+            parsed = self.parse_asn()
+            return parsed.asn if parsed else 0
+
+        customer_groups: dict[tuple, dict] = {}
+        circuits: list[EvpnCircuit] = []
+
+        for intf in self.config.iterfind(
+            ".//oc:interfaces/oc:interface", namespaces=self.ns
+        ):
+            name = intf.findtext("oc:name", namespaces=self.ns) or intf.findtext(
+                "oc:config/oc:name", namespaces=self.ns
+            )
+            if not name or "." not in name or name not in vni_by_subif:
+                continue
+            parent = name.split(".", 1)[0]
+            service = (
+                intf.findtext("oc:config/oc:description", namespaces=self.ns) or ""
+            ).strip()
+            outer = intf.findtext(
+                ".//ext:subinterface-encapsulation//ext:config/ext:outer-vlan-id",
+                namespaces=self.ns,
+            )
+            if not outer or not outer.isdigit():
+                continue
+            outer = int(outer)
+            action = intf.findtext(
+                ".//ext:subinterface-encapsulation/ext:rewrite/ext:config/ext:vlan-action",
+                namespaces=self.ns,
+            )
+            push_stag = intf.findtext(
+                ".//ext:subinterface-encapsulation/ext:rewrite/ext:config/ext:push-outer-vlan-id",
+                namespaces=self.ns,
+            )
+            vni = vni_by_subif[name]
+            ri = ri_by_name.get(service)
+
+            if action == "push" and push_stag and push_stag.isdigit():
+                stag = int(push_stag)
+                key = (parent, service, stag, vni)
+                group = customer_groups.setdefault(
+                    key,
+                    {"parent": parent, "service": service, "s_tag": stag,
+                     "vni": vni, "ri": ri, "c_tags": []},
+                )
+                group["c_tags"].append(outer)
+            elif action == "pop":
+                circuits.append(
+                    EvpnCircuit(
+                        evpn=AzureEvpn(
+                            description=service, asn=_asn(ri), vni=vni,
+                            s_tag=outer, role="cni", rewrite=True,
+                        ),
+                        routing_instance=ri,
+                        interface=parent,
+                    )
+                )
+            else:
+                circuits.append(
+                    EvpnCircuit(
+                        evpn=Evpn(
+                            vlan=Vlan(vlan_id=outer, name=service or None),
+                            description=service, asn=_asn(ri), vni=vni,
+                        ),
+                        routing_instance=ri,
+                        interface=parent,
+                    )
+                )
+
+        for group in customer_groups.values():
+            circuits.append(
+                EvpnCircuit(
+                    evpn=AzureEvpn(
+                        description=group["service"], asn=_asn(group["ri"]),
+                        vni=group["vni"], s_tag=group["s_tag"], role="customer",
+                        c_tags=sorted(set(group["c_tags"])),
+                    ),
+                    routing_instance=group["ri"],
+                    interface=group["parent"],
+                )
+            )
+        return circuits
+
     def parse_asn(self) -> Asn | None:
         for bgp_instance in self.config.iterfind(
             ".//bgp_core:bgp-instance",
@@ -980,7 +1104,7 @@ class OcnosConfigXMLParser:
         except ValueError:
             return None
 
-    def parse_config(self) -> dict[str, Any]:
+    def parse_config(self) -> Config:
         interfaces = self.parse_interfaces()
         lags = self.parse_lags()
         vlans = self.parse_vlans()

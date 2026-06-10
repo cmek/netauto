@@ -1,10 +1,19 @@
 import logging
 from typing import List, Optional
 
-from .models import Asn, AzureEvpn, Evpn, Interface, RoutingInstance
+from .models import (
+    Asn,
+    AzureEvpn,
+    CircuitDiff,
+    Evpn,
+    EvpnCircuit,
+    Interface,
+    RoutingInstance,
+)
 from .drivers import DeviceDriver
 from .exceptions import NetAutoException
 from .logic import _as_interface_map
+from .parsers import AristaConfigParser, OcnosConfigXMLParser
 
 logger = logging.getLogger(__name__)
 
@@ -18,10 +27,11 @@ class EvpnManager:
     orchestrator's job (Prefect) — this library only provides the per-device
     primitive.
 
-    Scope: global transport (EVPN/VXLAN) ``cloud_vc`` and ``p2p_vc`` circuits.
-    No Azure / local switching yet. The VNI is allocated by an external process
-    and passed in whole on the :class:`~netauto.models.Evpn` model; it is used
-    verbatim (never derived from the VLAN).
+    Scope: global transport (EVPN/VXLAN) ``cloud_vc`` / ``p2p_vc`` circuits and
+    Azure Q-in-Q (``create_azure_circuit``). Local switching is not implemented.
+    The VNI is allocated by an external process and passed in whole on the model;
+    it is used verbatim (never derived from the VLAN). ``get_circuits`` /
+    ``verify_circuit`` read configured state back into the models for inspection.
     """
 
     def __init__(self, driver: DeviceDriver):
@@ -284,3 +294,91 @@ class EvpnManager:
             )
 
         return "\n".join(d for d in diffs if d)
+
+    # ----------------------------------------------------------------- #
+    # Inspection / read-back (configured state)
+    # ----------------------------------------------------------------- #
+    def get_circuits(self) -> List[EvpnCircuit]:
+        """Read the EVPN circuits configured on this device back into models.
+
+        Reconstructs each circuit (plain ``Evpn`` or Azure ``AzureEvpn``) with
+        its access interface and ``RoutingInstance`` from ``driver.get_config()``
+        (running-config for Arista, NETCONF get-config XML for OcNOS). Configured
+        state only — see the docs for the (deferred) operational-health layer.
+        """
+        config = self.driver.get_config()
+        if self.driver.platform == "arista_eos":
+            return AristaConfigParser(config).parse_evpn_circuits()
+        if self.driver.platform == "ipinfusion_ocnos":
+            return OcnosConfigXMLParser(config).parse_evpn_circuits()
+        raise NetAutoException(
+            f"get_circuits not supported for platform {self.driver.platform}"
+        )
+
+    def verify_circuit(
+        self,
+        interface_name: str,
+        evpn: Evpn | AzureEvpn,
+        routing_instance: Optional[RoutingInstance] = None,
+    ) -> CircuitDiff:
+        """Compare an intended circuit against what is live on the device.
+
+        Reads the device back (:meth:`get_circuits`), finds the circuit with the
+        intended VNI, and reports field-level differences — the core debugging
+        primitive for "did my push land / has config drifted". More trustworthy
+        than the push diff (OcNOS dry-run over-reports removals).
+        """
+        candidates = [c for c in self.get_circuits() if c.evpn.vni == evpn.vni]
+        if not candidates:
+            return CircuitDiff(
+                present=False,
+                matches=False,
+                differences=[f"no circuit found with vni {evpn.vni}"],
+            )
+        # Prefer one on the intended interface when the binding is known.
+        circuit = next(
+            (c for c in candidates if c.interface == interface_name), candidates[0]
+        )
+        differences = self._diff_circuit(interface_name, evpn, routing_instance, circuit)
+        return CircuitDiff(
+            present=True, matches=not differences, differences=differences
+        )
+
+    @staticmethod
+    def _diff_circuit(
+        interface_name: str,
+        intended: Evpn | AzureEvpn,
+        routing_instance: Optional[RoutingInstance],
+        actual: EvpnCircuit,
+    ) -> List[str]:
+        diffs: List[str] = []
+
+        def cmp(label, want, got):
+            if want != got:
+                diffs.append(f"{label}: intended {want!r}, actual {got!r}")
+
+        if actual.interface is not None:
+            cmp("interface", interface_name, actual.interface)
+        cmp("description", intended.description, actual.evpn.description)
+        cmp("asn", intended.asn, actual.evpn.asn)
+
+        if type(intended) is not type(actual.evpn):
+            diffs.append(
+                f"service type: intended {type(intended).__name__}, "
+                f"actual {type(actual.evpn).__name__}"
+            )
+        elif isinstance(intended, AzureEvpn):
+            a = actual.evpn
+            cmp("role", intended.role, a.role)
+            cmp("s_tag", intended.s_tag, a.s_tag)
+            cmp("c_tags", sorted(intended.c_tags), sorted(a.c_tags))
+            cmp("rewrite", intended.rewrite, a.rewrite)
+            cmp("internal_s_tag", intended.internal_s_tag, a.internal_s_tag)
+        else:
+            cmp("vlan", intended.vlan.vlan_id, actual.evpn.vlan.vlan_id)
+
+        if routing_instance is not None and actual.routing_instance is not None:
+            cmp("rd", routing_instance.rd, actual.routing_instance.rd)
+            cmp("rt", routing_instance.rt_rd, actual.routing_instance.rt_rd)
+
+        return diffs

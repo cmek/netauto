@@ -183,11 +183,36 @@ The model (`AzureEvpn`) carries: `s_tag`, `c_tags` (1–3, customer side), `role
 
 ---
 
+## Inspection & read-back (debugging)
+
+The build direction has a mirror: reconstruct what is **actually configured** on
+a device back into the models.
+
+- `EvpnManager.get_circuits()` parses `driver.get_config()` (running-config for
+  Arista, NETCONF get-config for OcNOS) into `EvpnCircuit` views — each bundling
+  the access interface, the `Evpn` (or `AzureEvpn`, when Q-in-Q markers are
+  present), and its `RoutingInstance` (RD/RT).
+- `EvpnManager.verify_circuit(interface, intended, routing_instance)` reads the
+  device back and reports field-level drift (`CircuitDiff`) — the core "did my
+  push land / has it drifted" primitive, more trustworthy than the push diff.
+- `scripts/inspect_evpn.py <host>` / `--all` dumps circuits for humans; the
+  `audit_fabric` Prefect flow aggregates across devices to flag **VNI collisions**
+  (same VNI, different RT) and single-ended/orphaned circuits — the concrete
+  follow-through on global VNI uniqueness.
+
+Honest limits: an Azure **CNI-standard** circuit is byte-identical to a plain
+circuit on the device, so it reads back as `Evpn`. A **plain Arista** circuit's
+access port isn't determinable from config (the VLAN is merely trunked), so its
+`interface` is `None` (OcNOS and Azure-on-Arista bind the port reliably).
+**Operational** health (is it forwarding — BGP EVPN routes, VXLAN address-table)
+is a deliberate phase 2, distinct from this configured-state read-back.
+
 ## Implementation map
 
 | Concern | Where |
 |---------|-------|
-| Service layer | `src/netauto/evpn.py` (`EvpnManager`), `src/netauto/logic.py` (`LagManager`) |
+| Service layer | `src/netauto/evpn.py` (`EvpnManager` — create/delete + `get_circuits`/`verify_circuit`), `src/netauto/logic.py` (`LagManager`) |
+| Read-back / inspection | `src/netauto/parsers/` (`parse_evpn_circuits`); `scripts/inspect_evpn.py`; `audit_fabric` in `examples/prefect_evpn.py` |
 | Models | `src/netauto/models.py` (`Evpn`, `AzureEvpn`, `RoutingInstance`, `Interface`/`Lag`) |
 | Arista renderer | `src/netauto/render/arista.py` + `templates/arista_eos/*.j2` |
 | OcNOS renderer | `src/netauto/render/ocnos.py` (ElementTree → NETCONF) |

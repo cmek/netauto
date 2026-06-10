@@ -139,6 +139,36 @@ class Asn(BaseModel):
         return asn
 
 
+class EvpnCircuit(BaseModel):
+    """One EVPN circuit read back from a device, for inspection / verify.
+
+    Bundles the access interface with the reconstructed service model. ``evpn``
+    is an :class:`Evpn` for a plain cloud_vc/p2p_vc circuit or an
+    :class:`AzureEvpn` when Q-in-Q is detected (Arista ``dot1q-tunnel`` /
+    OcNOS ``rewrite push``, or a CNI rewrite). Note an Azure *CNI-standard*
+    circuit is byte-identical to a plain circuit on the device, so it reads back
+    as an ``Evpn`` — the "azure-ness" of that case lives in the orchestrator, not
+    the device config.
+
+    ``interface`` is the access port. It is authoritative on OcNOS (the dot1q
+    sub-interface's parent) and for Azure on Arista (the translation lives on the
+    port); for a plain Arista circuit the VLAN is merely trunked, so it is
+    best-effort and may be ``None``.
+    """
+
+    evpn: Evpn | AzureEvpn
+    routing_instance: Optional[RoutingInstance] = None
+    interface: Optional[str] = None
+
+
+class CircuitDiff(BaseModel):
+    """Result of verifying an intended circuit against the live device."""
+
+    present: bool  # a circuit matching the intended VNI was found on the device
+    matches: bool  # present AND every compared field matches
+    differences: list[str] = Field(default_factory=list)  # human-readable mismatches
+
+
 class Config(BaseModel):
     #    hostname: str
     asn: Optional[Asn] = None

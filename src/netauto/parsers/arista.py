@@ -2,7 +2,17 @@ import re
 import json
 from pathlib import Path
 from typing import Any, Pattern
-from netauto.models import Config, Asn, Evpn, Interface, Lag, RoutingInstance, Vlan
+from netauto.models import (
+    Config,
+    Asn,
+    AzureEvpn,
+    Evpn,
+    EvpnCircuit,
+    Interface,
+    Lag,
+    RoutingInstance,
+    Vlan,
+)
 
 
 class AristaConfigParser:
@@ -479,6 +489,101 @@ class AristaConfigParser:
             )
 
         return evpns
+
+    def parse_evpn_circuits(self) -> list[EvpnCircuit]:
+        """Reconstruct EVPN circuits (incl. Azure Q-in-Q) bound to their port.
+
+        Works on running-config. Detects Azure from the access-port translation
+        lines: ``switchport vlan translation <ctag> dot1q-tunnel <s_tag>`` is an
+        Azure *customer* port (gather the C-TAGs); a plain
+        ``switchport vlan translation <azure> <internal>`` is an Azure *CNI*
+        rewrite. An Azure CNI-standard circuit is indistinguishable from a plain
+        circuit on the device, so it is returned as a plain ``Evpn``.
+        """
+        config_parts = [
+            entry.strip("\n") for entry in re.split(r"^!", self.config, flags=re.M)
+        ]
+        interface_entry = [e for e in config_parts if e.startswith("interface ")]
+        vlan_entry = [e for e in config_parts if e.startswith("vlan ")]
+        vlan_name_map = {v.vlan_id: v.name for v in self.parse_vlans(vlan_entry) if v.name}
+
+        bgp_block = self._find_bgp_block(config_parts)
+        if not bgp_block:
+            return []
+        instances, rd_by_vlan = self._parse_bgp_instances_and_vlan_map(bgp_block)
+        instances_by_name = {i.instance_name: i for i in instances}
+
+        # Vxlan1: the VLAN/S-TAG -> VNI data-plane mapping.
+        vxlan_map: dict[int, int] = {}
+        for intf in interface_entry:
+            if intf.startswith("interface Vxlan1"):
+                for m in re.finditer(
+                    r"^\s+vxlan vlan\s+(\d+)\s+vni\s+(\d+)\s*$", intf, re.M
+                ):
+                    vxlan_map[int(m.group(1))] = int(m.group(2))
+                break
+
+        # Azure Q-in-Q markers on the access ports (the only reliable way to bind
+        # a circuit to a port on Arista — a plain circuit just trunks the VLAN,
+        # often on a trunk-all port, so its access port is NOT determinable from
+        # config and is left as None).
+        header = re.compile(r"^interface\s+(\S+)$", re.M)
+        tunnel_re = re.compile(
+            r"^\s+switchport vlan translation\s+(\d+)\s+dot1q-tunnel\s+(\d+)\s*$", re.M
+        )
+        xlate_re = re.compile(
+            r"^\s+switchport vlan translation\s+(\d+)\s+(\d+)\s*$", re.M
+        )
+
+        customer_by_stag: dict[int, tuple[str, list[int]]] = {}
+        cni_by_internal: dict[int, tuple[str, int]] = {}
+
+        for intf in interface_entry:
+            hm = header.search(intf)
+            if hm is None or hm.group(1).startswith("Vxlan"):
+                continue
+            name = hm.group(1)
+            for m in tunnel_re.finditer(intf):
+                ctag, stag = int(m.group(1)), int(m.group(2))
+                customer_by_stag.setdefault(stag, (name, []))[1].append(ctag)
+            for m in xlate_re.finditer(intf):
+                cni_by_internal[int(m.group(2))] = (name, int(m.group(1)))
+
+        circuits: list[EvpnCircuit] = []
+        for tag, vni in vxlan_map.items():
+            rd_info = rd_by_vlan.get(tag)
+            if rd_info is None:
+                continue
+            rd_value, instance_name = rd_info
+            try:
+                asn = int(rd_value.split(":", 1)[0])
+            except ValueError:
+                continue
+            ri = instances_by_name.get(instance_name)
+
+            iface: str | None
+            if tag in customer_by_stag:
+                iface, c_tags = customer_by_stag[tag]
+                svc: Evpn | AzureEvpn = AzureEvpn(
+                    description=instance_name, asn=asn, vni=vni, s_tag=tag,
+                    role="customer", c_tags=sorted(set(c_tags)),
+                )
+            elif tag in cni_by_internal:
+                iface, azure_stag = cni_by_internal[tag]
+                svc = AzureEvpn(
+                    description=instance_name, asn=asn, vni=vni, s_tag=azure_stag,
+                    role="cni", rewrite=True, internal_s_tag=tag,
+                )
+            else:
+                iface = None  # plain Arista circuit: access port not determinable
+                svc = Evpn(
+                    vlan=Vlan(vlan_id=tag, name=vlan_name_map.get(tag)),
+                    description=instance_name, asn=asn, vni=vni,
+                )
+            circuits.append(
+                EvpnCircuit(evpn=svc, routing_instance=ri, interface=iface)
+            )
+        return circuits
 
     def parse_config(self) -> Config:
         config_parts = [
