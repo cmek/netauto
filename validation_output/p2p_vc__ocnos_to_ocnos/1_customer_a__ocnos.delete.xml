@@ -1,0 +1,33 @@
+<?xml version="1.0" ?>
+<config xmlns:ethvpn="http://www.ipinfusion.com/yang/ocnos/ipi-ethernet-vpn" xmlns:if="http://www.ipinfusion.com/yang/ocnos/ipi-interface" xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0" xmlns:vxlan="http://www.ipinfusion.com/yang/ocnos/ipi-vxlan">
+  <if:interfaces>
+    <if:interface nc:operation="delete">
+      <if:name>eth4.101</if:name>
+    </if:interface>
+  </if:interfaces>
+  <ethvpn:evpn>
+    <ethvpn:interfaces>
+      <ethvpn:interface nc:operation="delete">
+        <ethvpn:name>eth4.101</ethvpn:name>
+      </ethvpn:interface>
+    </ethvpn:interfaces>
+  </ethvpn:evpn>
+  <vxlan:vxlan>
+    <vxlan:vxlan-tenants>
+      <vxlan:vxlan-tenant nc:operation="delete">
+        <vxlan:vxlan-identifier>5001</vxlan:vxlan-identifier>
+      </vxlan:vxlan-tenant>
+    </vxlan:vxlan-tenants>
+  </vxlan:vxlan>
+</config>
+
+<?xml version="1.0" ?>
+<config xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0" xmlns:netinst="http://www.ipinfusion.com/yang/ocnos/ipi-network-instance">
+  <netinst:network-instances>
+    <netinst:network-instance nc:operation="delete">
+      <netinst:instance-name>SO101011</netinst:instance-name>
+      <netinst:instance-type>mac-vrf</netinst:instance-type>
+    </netinst:network-instance>
+  </netinst:network-instances>
+</config>
+
