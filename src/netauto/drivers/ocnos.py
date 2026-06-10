@@ -483,6 +483,12 @@ class OcnosDriver(DeviceDriver):
             self.conn.lock(target="candidate")
             locked = True
 
+            # NOTE: OcNOS keeps a candidate datastore that is not refreshed from
+            # running on commit, and neither discard-changes nor copy-config
+            # reliably syncs it. As a result the computed dry-run diff can
+            # over-report *removals* (it compares running against a stale
+            # candidate baseline). The committed change itself is always correct
+            # -- commit only applies the explicit edits below.
             for cmd in commands:
                 logger.info("applying config to candidate '%s'", cmd)
                 edit_reply = self.conn.edit_config(target="candidate", config=cmd)

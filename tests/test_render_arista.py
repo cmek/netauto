@@ -109,6 +109,34 @@ interface Ethernet4
 no interface Port-Channel10"""
         )
 
+    def test_render_lag_add_members(self):
+        """Adding a member renders only its channel-group, not the LAG."""
+        cfg = self.renderer.render_lag_add_members(
+            Lag(
+                name="Port-Channel10",
+                lacp_mode="active",
+                members=[Interface(name="Ethernet7")],
+            )
+        )
+        assert (
+            "\n".join(cfg)
+            == """interface Ethernet7
+  channel-group 10 mode active
+  exit"""
+        )
+
+    def test_render_lag_remove_members(self):
+        """Removing a member renders only 'no channel-group' (LAG kept)."""
+        cfg = self.renderer.render_lag_remove_members(
+            Lag(name="Port-Channel10", members=[Interface(name="Ethernet7")])
+        )
+        assert (
+            "\n".join(cfg)
+            == """interface Ethernet7
+  no channel-group
+  exit"""
+        )
+
     def test_render_interface(self):
         """Test rendering interface config for Arista"""
         cfg = self.renderer.render_interface(

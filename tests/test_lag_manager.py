@@ -1,5 +1,5 @@
 import pytest
-from netauto.models import Interface, Vlan
+from netauto.models import Interface, Vlan, Lag
 from netauto.drivers import MockDriver
 from netauto.logic import LagManager
 from netauto.exceptions import NetAutoException
@@ -80,6 +80,87 @@ class TestLagManagerArista:
         mgr = LagManager(driver)
         with pytest.raises(NetAutoException):
             mgr.create_lag("Port-Channel10", ["Ethernet3"])
+
+
+class TestLagManagerAddRemoveArista:
+    def _driver(self):
+        # Existing Po10 with Ethernet3 as a member; Ethernet5 free; Ethernet6
+        # belongs to a different LAG.
+        return MockDriver(
+            platform="arista_eos",
+            initial_interfaces=[
+                Lag(name="Port-Channel10", members=[Interface(name="Ethernet3")]),
+                Interface(name="Ethernet3", lag_member_of="Port-Channel10"),
+                Interface(name="Ethernet5"),
+                Interface(name="Ethernet6", lag_member_of="Port-Channel20"),
+            ],
+            initial_switchports=[Interface(name="Ethernet5")],
+        )
+
+    def test_add_member(self):
+        driver = self._driver()
+        mgr = LagManager(driver)
+        mgr.add_members("Port-Channel10", ["Ethernet5"])
+        pushed = "\n".join(driver.pushed_commands)
+        assert "channel-group 10 mode active" in pushed
+        # LAG interface itself is not re-declared
+        assert "interface Port-Channel10" not in pushed
+
+    def test_add_member_on_missing_lag_raises(self):
+        driver = self._driver()
+        mgr = LagManager(driver)
+        with pytest.raises(NetAutoException):
+            mgr.add_members("Port-Channel99", ["Ethernet5"])
+
+    def test_add_member_already_in_other_lag_raises(self):
+        driver = self._driver()
+        mgr = LagManager(driver)
+        with pytest.raises(NetAutoException):
+            mgr.add_members("Port-Channel10", ["Ethernet6"])
+
+    def test_remove_member(self):
+        driver = self._driver()
+        mgr = LagManager(driver)
+        mgr.remove_members("Port-Channel10", ["Ethernet3"])
+        pushed = "\n".join(driver.pushed_commands)
+        assert "no channel-group" in pushed
+        # LAG interface is left intact
+        assert "no interface Port-Channel10" not in pushed
+
+    def test_remove_member_not_in_lag_raises(self):
+        driver = self._driver()
+        mgr = LagManager(driver)
+        with pytest.raises(NetAutoException):
+            mgr.remove_members("Port-Channel10", ["Ethernet5"])
+
+
+class TestLagManagerAddRemoveOcnos:
+    def _driver(self):
+        return MockDriver(
+            platform="ipinfusion_ocnos",
+            initial_interfaces=[
+                Lag(name="po10", members=[Interface(name="eth3")]),
+                Interface(name="eth3", lag_member_of="po10"),
+                Interface(name="eth5"),
+            ],
+            initial_switchports=[Interface(name="eth5")],
+        )
+
+    def test_add_member(self):
+        driver = self._driver()
+        mgr = LagManager(driver)
+        mgr.add_members("po10", ["eth5"])
+        joined = "\n".join(driver.pushed_commands)
+        assert "<if:name>eth5</if:name>" in joined
+        assert "<ifagg:aggregate-id>10</ifagg:aggregate-id>" in joined
+
+    def test_remove_member(self):
+        driver = self._driver()
+        mgr = LagManager(driver)
+        mgr.remove_members("po10", ["eth3"])
+        joined = "\n".join(driver.pushed_commands)
+        assert 'nc:operation="remove"' in joined
+        assert "<if:name>eth3</if:name>" in joined
 
 
 class TestLagManagerOcnos:

@@ -94,6 +94,50 @@ class TestOcnosDeviceRenderer:
 """
         )
 
+    def test_render_lag_add_members(self):
+        """Adding a member binds only that port's aggregation (po untouched)."""
+        xml = self.renderer.render_lag_add_members(
+            Lag(name="po10", lacp_mode="active", members=[Interface(name="eth5")])
+        )
+        assert (
+            xml
+            == """<?xml version="1.0" ?>
+<config xmlns:if="http://www.ipinfusion.com/yang/ocnos/ipi-interface" xmlns:ifagg="http://www.ipinfusion.com/yang/ocnos/ipi-if-aggregate">
+  <if:interfaces>
+    <if:interface>
+      <if:name>eth5</if:name>
+      <ifagg:member-aggregation>
+        <ifagg:config>
+          <ifagg:agg-type>lacp</ifagg:agg-type>
+          <ifagg:aggregate-id>10</ifagg:aggregate-id>
+          <ifagg:lacp-mode>active</ifagg:lacp-mode>
+        </ifagg:config>
+      </ifagg:member-aggregation>
+    </if:interface>
+  </if:interfaces>
+</config>
+"""
+        )
+
+    def test_render_lag_remove_members(self):
+        """Removing a member detaches only its aggregation (po kept)."""
+        xml = self.renderer.render_lag_remove_members(
+            Lag(name="po10", members=[Interface(name="eth5")])
+        )
+        assert (
+            xml
+            == """<?xml version="1.0" ?>
+<config xmlns:if="http://www.ipinfusion.com/yang/ocnos/ipi-interface" xmlns:ifagg="http://www.ipinfusion.com/yang/ocnos/ipi-if-aggregate" xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <if:interfaces>
+    <if:interface>
+      <if:name>eth5</if:name>
+      <ifagg:member-aggregation nc:operation="remove"/>
+    </if:interface>
+  </if:interfaces>
+</config>
+"""
+        )
+
     def test_render_interface(self):
         """Test rendering interface config for OcNOS (XML)."""
         xml = self.renderer.render_interface(

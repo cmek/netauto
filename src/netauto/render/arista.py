@@ -43,6 +43,18 @@ class AristaDeviceRenderer(DeviceRenderer):
         )
         return [line for line in rendered.split("\n") if line.strip()]
 
+    def render_lag_add_members(self, lag: Lag) -> List[str]:
+        """Render channel-group config for new members of an existing LAG."""
+        template = self.env.get_template("arista_eos/lag_add_members.j2")
+        rendered = template.render(lag=lag)
+        return [line for line in rendered.split("\n") if line.strip()]
+
+    def render_lag_remove_members(self, lag: Lag) -> List[str]:
+        """Render config detaching members from a LAG (LAG interface kept)."""
+        template = self.env.get_template("arista_eos/lag_remove_members.j2")
+        rendered = template.render(lag=lag)
+        return [line for line in rendered.split("\n") if line.strip()]
+
     def render_evpn(self, interface: Interface, evpn: Evpn) -> List[str]:
         """Render EVPN service configuration."""
         template_path = f"arista_eos/evpn.j2"

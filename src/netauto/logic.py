@@ -189,3 +189,80 @@ class LagManager:
         lag = Lag(name=lag_name, members=members)
         logger.info("deleting LAG %s (members %s)", lag_name, member_ports)
         return self.driver.push_lag(lag, delete=True, dry_run=dry_run)
+
+    def _push_rendered(self, rendered, dry_run: bool) -> str:
+        """Normalise a renderer result (CLI list or single XML string) and push."""
+        commands = rendered if isinstance(rendered, list) else [rendered]
+        return self.driver.push_config(commands, dry_run=dry_run)
+
+    def add_members(
+        self,
+        lag_name: str,
+        member_ports: List[str],
+        lacp_mode: str = "active",
+        dry_run: bool = False,
+    ) -> str:
+        """Add ports to an existing LAG without disturbing its other members.
+
+        The LAG must already exist. Ports already belonging to a *different* LAG
+        are refused; re-adding a port already in this LAG is a no-op.
+        """
+        inventory = _as_interface_map(self.driver.get_interfaces())
+        switchports = _as_interface_map(self.driver.get_switchports())
+
+        if lag_name not in inventory:
+            raise NetAutoException(
+                f"LAG {lag_name} does not exist; use create_lag first."
+            )
+
+        for port in member_ports:
+            if port not in inventory and port not in switchports:
+                raise NetAutoException(f"Port {port} does not exist on device.")
+            member_of = (
+                getattr(inventory.get(port), "lag_member_of", None)
+                or getattr(switchports.get(port), "lag_member_of", None)
+            )
+            if member_of and member_of != lag_name:
+                raise NetAutoException(
+                    f"Port {port} is already a member of {member_of}"
+                )
+
+        lag = Lag(
+            name=lag_name,
+            members=[Interface(name=p) for p in member_ports],
+            lacp_mode=lacp_mode,
+            mtu=None,
+        )
+        logger.info("adding members %s to LAG %s", member_ports, lag_name)
+        return self._push_rendered(
+            self.driver.renderer.render_lag_add_members(lag), dry_run
+        )
+
+    def remove_members(
+        self, lag_name: str, member_ports: List[str], dry_run: bool = False
+    ) -> str:
+        """Detach ports from a LAG, leaving the LAG and its other members intact.
+
+        Each port must currently belong to ``lag_name`` — this guards against
+        accidentally detaching a port from a different LAG (`no channel-group`
+        would otherwise pull it out of whatever channel it is in).
+        """
+        inventory = _as_interface_map(self.driver.get_interfaces())
+
+        for port in member_ports:
+            member_of = getattr(inventory.get(port), "lag_member_of", None)
+            if member_of != lag_name:
+                raise NetAutoException(
+                    f"Port {port} is not a member of {lag_name} "
+                    f"(currently: {member_of})"
+                )
+
+        lag = Lag(
+            name=lag_name,
+            members=[Interface(name=p) for p in member_ports],
+            mtu=None,
+        )
+        logger.info("removing members %s from LAG %s", member_ports, lag_name)
+        return self._push_rendered(
+            self.driver.renderer.render_lag_remove_members(lag), dry_run
+        )

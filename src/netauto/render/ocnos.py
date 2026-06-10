@@ -159,6 +159,40 @@ class OcnosDeviceRenderer(DeviceRenderer):
 
         return self._tostring(config)
 
+    def render_lag_add_members(self, lag: Lag) -> str:
+        """Render an edit-config that binds new members to an existing po."""
+        port_channel_id = int(lag.name.replace("po", ""))
+        config = self._config_root()
+        interfaces = ET.SubElement(config, self._tag("if", "interfaces"))
+        for member in lag.members:
+            intf = ET.SubElement(interfaces, self._tag("if", "interface"))
+            ET.SubElement(intf, self._tag("if", "name")).text = member.name
+            agg = ET.SubElement(intf, self._tag("ifagg", "member-aggregation"))
+            agg_config = ET.SubElement(agg, self._tag("ifagg", "config"))
+            ET.SubElement(agg_config, self._tag("ifagg", "agg-type")).text = "lacp"
+            ET.SubElement(agg_config, self._tag("ifagg", "aggregate-id")).text = str(
+                port_channel_id
+            )
+            ET.SubElement(agg_config, self._tag("ifagg", "lacp-mode")).text = (
+                lag.lacp_mode
+            )
+        return self._tostring(config)
+
+    def render_lag_remove_members(self, lag: Lag) -> str:
+        """Render an edit-config that detaches members from a po (po kept).
+
+        Uses operation="remove" so it is idempotent if a port is already
+        detached.
+        """
+        config = self._config_root()
+        interfaces = ET.SubElement(config, self._tag("if", "interfaces"))
+        for member in lag.members:
+            intf = ET.SubElement(interfaces, self._tag("if", "interface"))
+            ET.SubElement(intf, self._tag("if", "name")).text = member.name
+            agg = ET.SubElement(intf, self._tag("ifagg", "member-aggregation"))
+            agg.set(self._tag("nc", "operation"), "remove")
+        return self._tostring(config)
+
     def _append_vlan(
         self,
         root: ET.Element,
