@@ -37,18 +37,18 @@ circuit, dual-CNI, VNI allocation) is owned by the orchestrator (Prefect).
 graph TD
     Orchestrator["Orchestrator (Prefect)<br/>allocates VNIs, drives both ends, dual-CNI"]
 
-    subgraph Service Layer
-      EvpnManager["EvpnManager<br/>create_circuit / create_azure_circuit<br/>(validate → VRF → circuit)"]
-      LagManager["LagManager<br/>(single-switch LAG)"]
+    subgraph svc["Service Layer"]
+      EvpnManager["EvpnManager<br/>create_circuit / create_azure_circuit<br/>validate then VRF then circuit"]
+      LagManager["LagManager<br/>single-switch LAG"]
     end
 
-    subgraph Network Element Layer
-      Models["Pydantic models<br/>Evpn · AzureEvpn · RoutingInstance · Interface"]
-      Renderers["Renderers<br/>Arista (Jinja/CLI) · OcNOS (ElementTree/NETCONF)"]
-      Drivers["Drivers (adapter pattern)<br/>AristaDriver (eAPI) · OcnosDriver (NETCONF) · MockDriver"]
+    subgraph nel["Network Element Layer"]
+      Models["Pydantic models<br/>Evpn, AzureEvpn, RoutingInstance, Interface"]
+      Renderers["Renderers<br/>Arista Jinja/CLI, OcNOS ElementTree/NETCONF"]
+      Drivers["Drivers - adapter pattern<br/>AristaDriver eAPI, OcnosDriver NETCONF, MockDriver"]
     end
 
-    Device["Network device<br/>Arista EOS · IP Infusion OcNOS"]
+    Device["Network device<br/>Arista EOS, IP Infusion OcNOS"]
 
     Orchestrator --> EvpnManager
     Orchestrator --> LagManager
@@ -88,10 +88,10 @@ Each endpoint is built as **two device transactions**:
 
 ```mermaid
 graph LR
-    A["create_circuit(interface, evpn, routing_instance)"] --> B{interface exists?<br/>VNI free?}
+    A["create_circuit interface, evpn, routing_instance"] --> B{"interface exists?<br/>VNI free?"}
     B -->|no| Err["raise NetAutoException"]
-    B -->|yes| C["Tx1: VRF<br/>mac-vrf / vlan-aware-bundle<br/>(RD + route-target)"]
-    C --> D["Tx2: circuit<br/>access sub-if / switchport<br/>VLAN↔VNI VXLAN map<br/>EVPN access binding"]
+    B -->|yes| C["Tx1: VRF<br/>mac-vrf / vlan-aware-bundle<br/>RD + route-target"]
+    C --> D["Tx2: circuit<br/>access sub-if / switchport<br/>VLAN to VNI VXLAN map<br/>EVPN access binding"]
     D --> E["config diff"]
 ```
 
@@ -163,10 +163,10 @@ VNI; the orchestrator drives the two CNIs.
 
 ```mermaid
 graph TD
-    P["Azure S-TAG conflicts with an existing VXLAN mapping on the CNI"] --> V{Vendor?}
-    V -->|Arista| A["switchport vlan translation azure_s_tag → internal_s_tag<br/>VXLAN keyed on internal_s_tag (bidirectional)"]
-    V -->|OcNOS| I["encapsulation dot1q s_tag<br/>rewrite pop + arp-cache/nd-cache disable"]
-    A --> K["Same intent, incompatible syntax → vendor-specific templates"]
+    P["Azure S-TAG conflicts with an existing VXLAN mapping on the CNI"] --> V{"Vendor?"}
+    V -->|Arista| A["switchport vlan translation azure_s_tag to internal_s_tag<br/>VXLAN keyed on internal_s_tag, bidirectional"]
+    V -->|OcNOS| I["encapsulation dot1q s_tag<br/>rewrite pop plus arp-cache/nd-cache disable"]
+    A --> K["Same intent, incompatible syntax, vendor-specific templates"]
     I --> K
 ```
 
