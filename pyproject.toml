@@ -1,7 +1,7 @@
 [project]
 name = "netauto"
-version = "0.1.13"
-description = "Add your description here"
+version = "0.1.14"
+description = "some network automation stuff"
 readme = "README.md"
 authors = [
     { name = "Szymon Roczniak", email = "simon@dischaos.com" },
