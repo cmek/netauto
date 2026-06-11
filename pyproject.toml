@@ -1,6 +1,6 @@
 [project]
 name = "netauto"
-version = "0.1.14"
+version = "0.1.15"
 description = "some network automation stuff"
 readme = "README.md"
 authors = [

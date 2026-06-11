@@ -1,0 +1,28 @@
+<data xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <vxlan xmlns="http://www.ipinfusion.com/yang/ocnos/ipi-vxlan">
+    <global>
+      <config>
+        <enable-vxlan/>
+        <vtep-ipv4>10.0.0.6</vtep-ipv4>
+      </config>
+    </global>
+    <vxlan-tenants>
+      <vxlan-tenant>
+        <vxlan-identifier>10010</vxlan-identifier>
+        <config>
+          <vxlan-identifier>10010</vxlan-identifier>
+          <tenant-type>ingress-replication</tenant-type>
+          <vrf-name>vrf_vni_10010</vrf-name>
+        </config>
+      </vxlan-tenant>
+      <vxlan-tenant>
+        <vxlan-identifier>10020</vxlan-identifier>
+        <config>
+          <vxlan-identifier>10020</vxlan-identifier>
+          <tenant-type>ingress-replication</tenant-type>
+          <vrf-name>vrf_vni_10020</vrf-name>
+        </config>
+      </vxlan-tenant>
+    </vxlan-tenants>
+  </vxlan>
+</data>
