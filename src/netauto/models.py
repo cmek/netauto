@@ -169,6 +169,23 @@ class CircuitDiff(BaseModel):
     differences: list[str] = Field(default_factory=list)  # human-readable mismatches
 
 
+class EnsureResult(BaseModel):
+    """Outcome of an idempotent ``ensure_circuit`` call."""
+
+    action: Literal["created", "updated", "unchanged"]
+    differences: list[str] = Field(default_factory=list)  # what drifted (if updated)
+    config_diff: str = ""  # device config diff, when a push happened
+
+
+class ReconcilePlan(BaseModel):
+    """Fabric reconcile of an intended inventory against live state, keyed by VNI."""
+
+    to_create: list[int] = Field(default_factory=list)  # in intent, not on device
+    to_update: dict[int, list[str]] = Field(default_factory=dict)  # vni -> drift
+    to_delete: list[int] = Field(default_factory=list)  # on device, not in intent
+    in_sync: list[int] = Field(default_factory=list)
+
+
 class Config(BaseModel):
     #    hostname: str
     asn: Optional[Asn] = None

@@ -1,6 +1,7 @@
 from .base import DeviceDriver
 import pyeapi
 from netauto.models import Interface, Vlan, Lag, Evpn
+from netauto.exceptions import NetAutoException, PushFailed
 from netauto.render import AristaDeviceRenderer
 from typing import List, Dict, Any
 import logging
@@ -264,7 +265,9 @@ class AristaDriver(DeviceDriver):
                 f"Failed to push config commands: {e}. Aborting session {self.node._session_name}"
             )
             self.node.abort()
-            raise
+            if isinstance(e, NetAutoException):
+                raise
+            raise PushFailed(f"Arista push failed: {e}") from e
 
         if dry_run:
             logger.info(

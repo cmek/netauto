@@ -5,13 +5,15 @@ from .models import (
     Asn,
     AzureEvpn,
     CircuitDiff,
+    EnsureResult,
     Evpn,
     EvpnCircuit,
     Interface,
+    ReconcilePlan,
     RoutingInstance,
 )
 from .drivers import DeviceDriver
-from .exceptions import NetAutoException
+from .exceptions import InterfaceNotFound, NetAutoException, VniInUse
 from .logic import _as_interface_map
 from .parsers import AristaConfigParser, OcnosConfigXMLParser
 
@@ -48,7 +50,7 @@ class EvpnManager:
         switchports = _as_interface_map(self.driver.get_switchports())
         interface = inventory.get(interface_name) or switchports.get(interface_name)
         if interface is None:
-            raise NetAutoException(
+            raise InterfaceNotFound(
                 f"Interface {interface_name} does not exist on device."
             )
         return interface
@@ -66,7 +68,7 @@ class EvpnManager:
             if isinstance(existing, dict):
                 mapped = existing[vni] or {}
                 detail = f" (mapped to VLAN {mapped.get('vlan_id', 'unknown')})"
-            raise NetAutoException(f"VNI {vni} is already in use{detail}")
+            raise VniInUse(f"VNI {vni} is already in use{detail}")
 
     def create_circuit(
         self,
@@ -307,6 +309,8 @@ class EvpnManager:
         state only — see the docs for the (deferred) operational-health layer.
         """
         config = self.driver.get_config()
+        if not config or not str(config).strip():
+            return []  # no config => no circuits
         if self.driver.platform == "arista_eos":
             return AristaConfigParser(config).parse_evpn_circuits()
         if self.driver.platform == "ipinfusion_ocnos":
@@ -342,6 +346,57 @@ class EvpnManager:
         differences = self._diff_circuit(interface_name, evpn, routing_instance, circuit)
         return CircuitDiff(
             present=True, matches=not differences, differences=differences
+        )
+
+    # ----------------------------------------------------------------- #
+    # Declarative ensure (idempotent: read -> diff -> converge)
+    # ----------------------------------------------------------------- #
+    def ensure_circuit(
+        self,
+        interface_name: str,
+        evpn: Evpn,
+        routing_instance: Optional[RoutingInstance] = None,
+        dry_run: bool = False,
+    ) -> EnsureResult:
+        """Idempotently converge the device to the intended circuit.
+
+        Reads the device back: **absent** -> create; **drifted** -> re-apply
+        (overwrite); **already correct** -> no-op. Safe to re-run; a partial
+        failure self-heals on the next call. Returns what action was taken.
+        """
+        return self._ensure(
+            interface_name, evpn, routing_instance, dry_run,
+            lambda: self.create_circuit(
+                interface_name, evpn, routing_instance=routing_instance,
+                create_vrf=routing_instance is not None, dry_run=dry_run,
+            ),
+        )
+
+    def ensure_azure_circuit(
+        self,
+        interface_name: str,
+        azure: AzureEvpn,
+        routing_instance: Optional[RoutingInstance] = None,
+        dry_run: bool = False,
+    ) -> EnsureResult:
+        """Idempotent ``ensure`` for an Azure Q-in-Q circuit (see ensure_circuit)."""
+        return self._ensure(
+            interface_name, azure, routing_instance, dry_run,
+            lambda: self.create_azure_circuit(
+                interface_name, azure, routing_instance=routing_instance,
+                create_vrf=routing_instance is not None, dry_run=dry_run,
+            ),
+        )
+
+    def _ensure(self, interface_name, intended, routing_instance, dry_run, apply):
+        diff = self.verify_circuit(interface_name, intended, routing_instance)
+        if not diff.present:
+            return EnsureResult(action="created", config_diff=apply())
+        if diff.matches:
+            return EnsureResult(action="unchanged")
+        # drifted -> re-apply to converge (create renders the full intended state)
+        return EnsureResult(
+            action="updated", differences=diff.differences, config_diff=apply()
         )
 
     @staticmethod
@@ -382,3 +437,39 @@ class EvpnManager:
             cmp("rt", routing_instance.rt_rd, actual.routing_instance.rt_rd)
 
         return diffs
+
+
+def plan_reconcile(
+    intended: List[EvpnCircuit], actual: List[EvpnCircuit]
+) -> ReconcilePlan:
+    """Diff an intended circuit inventory against live read-back, keyed by VNI.
+
+    Pure and report-only — the orchestrator decides whether to apply. The VNI is
+    the fabric-wide service identifier, so it is the natural match key:
+    ``to_create`` (intended, absent), ``to_update`` (present but drifted),
+    ``to_delete`` (on device, not intended — orphans/extras), ``in_sync``.
+    """
+    intended_by_vni = {c.evpn.vni: c for c in intended}
+    actual_by_vni = {c.evpn.vni: c for c in actual}
+
+    plan = ReconcilePlan()
+    for vni, want in intended_by_vni.items():
+        have = actual_by_vni.get(vni)
+        if have is None:
+            plan.to_create.append(vni)
+            continue
+        diffs = EvpnManager._diff_circuit(
+            want.interface or have.interface or "",
+            want.evpn,
+            want.routing_instance,
+            have,
+        )
+        if diffs:
+            plan.to_update[vni] = diffs
+        else:
+            plan.in_sync.append(vni)
+
+    plan.to_delete = sorted(set(actual_by_vni) - set(intended_by_vni))
+    plan.to_create.sort()
+    plan.in_sync.sort()
+    return plan

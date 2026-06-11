@@ -263,6 +263,30 @@ class TestLiveReadBack:
         assert not mgr.verify_circuit(interface, evpn, ri).present
         driver.disconnect()
 
+    def test_arista_ensure_is_idempotent(self):
+        driver = AristaDriver(host=ARISTA_HOST, user=USERNAME, password=PASSWORD,
+                              enable_password=os.getenv("ARISTA_ENABLE", "admin"))
+        driver.connect()
+        cfg = driver.get_config()
+        vlan = _free_value(cfg, range(3700, 3999), lambda v: f"vlan {v} ")
+        vni = _free_value(cfg, range(39500, 39599), lambda v: f"vni {v}")
+        key = f"SO9{vni}"
+        interface = os.getenv("ARISTA_EVPN_PORT", "Ethernet6")
+        evpn = Evpn(vlan=Vlan(vlan_id=vlan, name=key), asn=ARISTA_ASN, vni=vni,
+                    description=key, service_type="cloud_vc")
+        ri = RoutingInstance(instance_name=key, instance_type="mac-vrf",
+                             rd=f"{ARISTA_ASN}:{vni}", rt_rd=f"{TERACO_ASN}:{vni}")
+        mgr = EvpnManager(driver)
+        try:
+            first = mgr.ensure_circuit(interface, evpn, ri)
+            assert first.action == "created"
+            second = mgr.ensure_circuit(interface, evpn, ri)
+            assert second.action == "unchanged", second.differences  # idempotent
+        finally:
+            mgr.delete_circuit(interface, evpn, routing_instance=ri, delete_vrf=True)
+            driver.push_config([f"default interface {interface}"])
+        driver.disconnect()
+
     def test_ocnos_readback_and_verify(self):
         driver = OcnosDriver(host=OCNOS_HOST, user=USERNAME, password=OCNOS_PASSWORD)
         driver.connect()

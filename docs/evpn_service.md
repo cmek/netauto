@@ -207,6 +207,23 @@ access port isn't determinable from config (the VLAN is merely trunked), so its
 **Operational** health (is it forwarding — BGP EVPN routes, VXLAN address-table)
 is a deliberate phase 2, distinct from this configured-state read-back.
 
+## Declarative operations
+
+On top of read-back, the framework supports a declarative workflow:
+
+- **`EvpnManager.ensure_circuit(...)`** — idempotent converge: read back → if absent
+  create, if drifted re-apply, if correct no-op (returns an `EnsureResult`). Safe
+  re-runs; a partial failure self-heals on the next call. (Live-validated: a second
+  `ensure` of the same circuit is a no-op.)
+- **`plan_reconcile(intended, actual)`** — diff an intended inventory against live
+  read-back, keyed by VNI → `to_create` / `to_update` / `to_delete` / `in_sync`
+  (report-only; the `reconcile_fabric` Prefect flow surfaces it).
+- **`netauto.allocation`** — `VniRegistry` (fabric-unique VNI allocation, JSON-file
+  default), `make_routing_instance` (the RD/RT convention in one place), and
+  `find_conflicts` (the fabric VNI/RT collision audit).
+- **Typed errors** — `InterfaceNotFound`, `VniInUse`, `RtCollision`, `CircuitConflict`,
+  `PushFailed` (all subclass `NetAutoException`) let the orchestrator branch on failure.
+
 ## Implementation map
 
 | Concern | Where |

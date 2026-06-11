@@ -8,6 +8,7 @@ from ncclient.manager import Manager
 from ncclient.operations import RPCError
 from ncclient.operations.retrieve import GetReply
 from netauto.models import Interface, Vlan, Lag, Evpn, RoutingInstance
+from netauto.exceptions import NetAutoException, PushFailed
 from netauto.render import OcnosDeviceRenderer
 from netmiko import ConnectHandler
 
@@ -532,7 +533,9 @@ class OcnosDriver(DeviceDriver):
                 self.conn.discard_changes()
             except Exception:
                 pass
-            raise
+            if isinstance(e, NetAutoException):
+                raise
+            raise PushFailed(f"OcNOS push failed: {e}") from e
 
         finally:
             if locked:

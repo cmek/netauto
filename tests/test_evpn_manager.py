@@ -3,7 +3,11 @@ from pydantic import ValidationError
 
 from netauto.drivers import MockDriver
 from netauto.evpn import EvpnManager
-from netauto.exceptions import NetAutoException
+from netauto.exceptions import (
+    InterfaceNotFound,
+    NetAutoException,
+    VniInUse,
+)
 from netauto.models import AzureEvpn, Asn, Evpn, Interface, RoutingInstance, Vlan
 
 
@@ -148,6 +152,26 @@ class TestEvpnManagerOcnos:
             EvpnManager(driver).create_circuit(
                 "eth4", _evpn(), routing_instance=_ri()
             )
+
+
+class TestTypedExceptions:
+    """Typed errors are raised AND still subclass NetAutoException (backward-compat)."""
+
+    def test_unknown_interface_is_interface_not_found(self):
+        driver = _arista_driver()
+        with pytest.raises(InterfaceNotFound) as exc:
+            EvpnManager(driver).create_circuit(
+                "Ethernet99", _evpn(), routing_instance=_ri()
+            )
+        assert isinstance(exc.value, NetAutoException)
+
+    def test_vni_in_use_is_vni_in_use(self):
+        driver = _arista_driver(vnis={5000: {"vlan_id": 100}})
+        with pytest.raises(VniInUse) as exc:
+            EvpnManager(driver).create_circuit(
+                "Ethernet6", _evpn(), routing_instance=_ri()
+            )
+        assert isinstance(exc.value, NetAutoException)
 
 
 def _azure(role="customer", c_tags=(10, 20), **kw):
