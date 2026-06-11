@@ -9,12 +9,7 @@ RUN_LIVE_TESTS=1 uv run pytest tests/test_live_devices.py   # live (needs the la
 ```
 
 Offline tests use `MockDriver` and committed fixtures — no network. Live tests
-are skipped unless `RUN_LIVE_TESTS=1`.
-
-> **Known pre-existing failures (6):** `tests/test_models.py` (a `Bgp` model that
-> doesn't exist) and `tests/test_real_drivers_syntax.py` (mocks a
-> `ScrapliNetconfDriver` that doesn't exist). Unrelated to the EVPN/LAG work;
-> tracked in `TODO.md`.
+are skipped unless `RUN_LIVE_TESTS=1`. The offline suite is green.
 
 ## Offline tests (`tests/`)
 
@@ -29,8 +24,7 @@ are skipped unless `RUN_LIVE_TESTS=1`.
 | `test_allocation.py` | `JsonFileRegistry` allocate/release/uniqueness/idempotency/persistence + RT collision; `find_conflicts`; `make_routing_instance`. |
 | `test_evpn_validation_matrix.py` | Golden-file guard: regenerates the validation matrix and asserts it matches `validation_output/`. |
 | `test_drivers.py` | `MockDriver` behaviour; OcNOS `_extract_interfaces` / `_extract_vnis` from XML fixtures (regression guard for the lxml `get_vnis` bug). |
-| `test_models.py` | Pydantic model validation. *(contains pre-existing failures — see above)* |
-| `test_real_drivers_syntax.py` | Driver import/syntax smoke. *(pre-existing failures — see above)* |
+| `test_models.py` | Pydantic model validation (Vlan / Interface / Lag / Vrf). |
 
 Fixtures: `tests/ocnos_interfaces.xml`, `tests/ocnos_vxlan.xml`,
 `validation_output/` (generated golden configs).

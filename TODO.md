@@ -59,9 +59,7 @@ freshly-created circuit shows interface-up / EVI-up; teardown reflected.
 - Service coverage: other cloud providers (AWS/GCP/Oracle/Alibaba/Huawei — VPWS,
   same shape as `cloud_vc`), same-device **local switching** (no VXLAN), **MLAG**.
 - Framework hygiene: driver context-managers + retries/timeouts; a
-  **containerlab-based CI** integration harness (lab is containerlab); clear the
-  6 pre-existing unrelated test failures (`test_models` Bgp model, `test_real_drivers_syntax`
-  ScrapliNetconfDriver).
+  **containerlab-based CI** integration harness (lab is containerlab).
 - Declarative intent file: define a service in YAML → provision + validate (thin
   entrypoint over `ensure`).
 

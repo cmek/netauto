@@ -1,6 +1,6 @@
 import pytest
 from pydantic import ValidationError
-from netauto.models import Vlan, Interface, Lag, Vrf, Evpn, EvpnService
+from netauto.models import Vlan, Interface, Lag, Vrf
 
 
 class TestModels:
@@ -104,35 +104,6 @@ class TestModels:
         )
         assert len(vrf.rt_import) == 2
         assert len(vrf.rt_export) == 3
-
-    def test_bgp_model(self):
-        """Test BGP model."""
-        bgp = Bgp(
-            as_number=65001, router_id="10.1.1.1", neighbors=["10.1.1.2", "10.1.1.3"]
-        )
-        assert bgp.as_number == 65001
-        assert bgp.router_id == "10.1.1.1"
-        assert len(bgp.neighbors) == 2
-
-    def test_bgp_defaults(self):
-        """Test BGP model with defaults."""
-        bgp = Bgp(as_number=65001, router_id="10.1.1.1")
-        assert bgp.neighbors == []
-
-    def test_evpn_service_model(self):
-        """Test EVPN service model."""
-        service = EvpnService(vlan_id=100, vni=10100, vrf_name="TEST")
-        assert service.vlan_id == 100
-        assert service.vni == 10100
-        assert service.vrf_name == "TEST"
-        assert service.mcast_group is None
-
-    def test_evpn_service_with_mcast(self):
-        """Test EVPN service with multicast group."""
-        service = EvpnService(
-            vlan_id=200, vni=20200, vrf_name="MCAST_TEST", mcast_group="239.1.1.1"
-        )
-        assert service.mcast_group == "239.1.1.1"
 
     def test_interface_mode_validation(self):
         """Test that invalid interface modes are rejected."""

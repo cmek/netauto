@@ -519,7 +519,7 @@ wheels = [
 
 [[package]]
 name = "netauto"
-version = "0.1.12"
+version = "0.1.15"
 source = { editable = "." }
 dependencies = [
     { name = "jinja2" },
