@@ -47,6 +47,29 @@ class TestFindConflicts:
         conflicts = find_conflicts(circuits)
         assert conflicts["rt_collisions"] == {"37195:X": ["SOA", "SOB"]}
 
+    def test_blank_description_end_keys_on_vrf_name(self):
+        # An access sub-interface with no description reads back as description=""
+        # but still carries its VRF. Keying on the VRF name collapses the two ends
+        # of one circuit instead of flagging a spurious VNI/RT collision.
+        blank = EvpnCircuit(
+            evpn=Evpn(vlan=Vlan(vlan_id=10), asn=1, vni=5000, description=""),
+            routing_instance=RoutingInstance(
+                instance_name="pve2-4002", instance_type="mac-vrf",
+                rd="1:1", rt_rd="37195:1",
+            ),
+        )
+        named = _circuit("pve2-4002", 5000, "37195:1")
+        conflicts = find_conflicts([blank, named])
+        assert conflicts["vni_collisions"] == {}
+        assert conflicts["rt_collisions"] == {}
+
+    def test_falls_back_to_description_without_vrf(self):
+        # No routing instance bound -> the description is the only identity we have.
+        a = EvpnCircuit(evpn=Evpn(vlan=Vlan(vlan_id=10), asn=1, vni=5000, description="SOA"))
+        b = EvpnCircuit(evpn=Evpn(vlan=Vlan(vlan_id=10), asn=1, vni=5000, description="SOB"))
+        conflicts = find_conflicts([a, b])
+        assert conflicts["vni_collisions"] == {5000: ["SOA", "SOB"]}
+
 
 class TestJsonFileRegistry:
     def _reg(self, tmp_path):

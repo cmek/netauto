@@ -58,6 +58,22 @@ def make_routing_instance(
 # --------------------------------------------------------------------------- #
 # Fabric audit (pure; operates on read-back circuits)
 # --------------------------------------------------------------------------- #
+def _service_key(c) -> str:
+    """Service identity used to group circuits for collision detection.
+
+    Prefer the routing-instance (VRF) name: it is read back authoritatively from
+    the device (the VXLAN tenant -> VRF mapping) and is the same on both ends of a
+    circuit. Fall back to ``evpn.description`` — the access-port label — only when
+    no VRF is bound; that label can be blank when a sub-interface has no
+    ``description`` configured, which would otherwise make one end of a normal
+    circuit look like a *different* service and raise a spurious collision.
+    """
+    ri = c.routing_instance
+    if ri is not None and ri.instance_name:
+        return ri.instance_name
+    return c.evpn.description
+
+
 def find_conflicts(circuits: Iterable) -> dict:
     """Flag fabric-wide identifier hazards across read-back ``EvpnCircuit``s.
 
@@ -69,7 +85,7 @@ def find_conflicts(circuits: Iterable) -> dict:
     by_vni: dict[int, set[str]] = {}
     by_rt: dict[str, set[str]] = {}
     for c in circuits:
-        key = c.evpn.description
+        key = _service_key(c)
         by_vni.setdefault(c.evpn.vni, set()).add(key)
         if c.routing_instance is not None:
             by_rt.setdefault(c.routing_instance.rt_rd, set()).add(key)
@@ -117,7 +133,7 @@ class VniRegistry(ABC):
         """
         for c in circuits:
             self.record(
-                c.evpn.description,
+                _service_key(c),
                 c.evpn.vni,
                 c.routing_instance.rt_rd if c.routing_instance else None,
             )
