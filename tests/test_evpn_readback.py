@@ -10,6 +10,7 @@ Plus EvpnManager.verify_circuit drift detection.
 import pytest
 from lxml import etree
 
+from netauto.allocation import find_conflicts
 from netauto.evpn import EvpnManager
 from netauto.models import AzureEvpn, Asn, Evpn, Interface, RoutingInstance, Vlan
 from netauto.parsers.arista import AristaConfigParser
@@ -182,6 +183,96 @@ class TestOcnosRoundTrip:
         assert c.evpn.role == "cni"
         assert c.evpn.rewrite is True
         assert c.evpn.s_tag == 702
+
+    def test_blank_subinterface_description_recovers_vrf(self):
+        # A sub-interface with an EVPN binding but no `description` reads back with
+        # description="" — but its VRF (service identity) is still recovered from
+        # the VXLAN tenant mapping, so the audit keys it correctly rather than
+        # treating it as an unnamed, conflicting service.
+        r = OcnosDeviceRenderer()
+        intent = Evpn(vlan=Vlan(vlan_id=425, name="vlan-425"), asn=65001,
+                      vni=210425, description="vlan-425")
+        ri = _ri("vlan-425", 65001, 37195)
+        tree = _ocnos_device_tree(
+            r.render_routing_instance(Asn(asn=65001), ri),
+            r.render_evpn(Interface(name="eth4"), intent),
+        )
+        # Drop the access sub-interface's description to simulate an undescribed
+        # port (the VXLAN tenant's vrf-name is in a different namespace, untouched).
+        oc_desc = "{http://www.ipinfusion.com/yang/ocnos/ipi-interface}description"
+        for desc in list(tree.iter(oc_desc)):
+            desc.getparent().remove(desc)
+
+        (c,) = OcnosConfigXMLParser(tree).parse_evpn_circuits()
+        assert c.evpn.vni == 210425
+        assert c.evpn.description == ""  # the port genuinely has no description
+        assert c.routing_instance is not None
+        assert c.routing_instance.instance_name == "vlan-425"
+
+
+# --------------------------------------------------------------------------- #
+# Mixed Arista/OcNOS fabric — the audit must collapse the two ends of one
+# service even across platforms (and even when one end's port has no description)
+# --------------------------------------------------------------------------- #
+# Arista end of service "SO500500": vlan-aware-bundle named by the service key,
+# exactly as create_circuit enforces (instance_name == description).
+ARISTA_RC_500 = """!
+vlan 50
+   name SO500500
+!
+interface Ethernet9
+   switchport mode trunk
+   switchport trunk allowed vlan 50
+!
+interface Vxlan1
+   vxlan source-interface Loopback0
+   vxlan vlan 50 vni 20500
+!
+router bgp 65001
+   vlan-aware-bundle SO500500
+      rd 65001:500500
+      route-target both 37195:500500
+      vlan 50
+!
+"""
+
+
+class TestMixedFabricAudit:
+    def _ocnos_end(self, *, blank_description: bool):
+        # OcNOS end of the same service "SO500500" — same VNI, same fabric RT,
+        # different device ASN (each device's rd uses its own ASN).
+        r = OcnosDeviceRenderer()
+        intent = Evpn(vlan=Vlan(vlan_id=50, name="SO500500"), asn=65002,
+                      vni=20500, description="SO500500")
+        ri = _ri("SO500500", 65002, 37195)
+        tree = _ocnos_device_tree(
+            r.render_routing_instance(Asn(asn=65002), ri),
+            r.render_evpn(Interface(name="eth4"), intent),
+        )
+        if blank_description:
+            oc_desc = "{http://www.ipinfusion.com/yang/ocnos/ipi-interface}description"
+            for desc in list(tree.iter(oc_desc)):
+                desc.getparent().remove(desc)
+        return OcnosConfigXMLParser(tree).parse_evpn_circuits()
+
+    def test_same_service_across_platforms_is_not_a_collision(self):
+        arista = AristaConfigParser(ARISTA_RC_500).parse_evpn_circuits()
+        ocnos = self._ocnos_end(blank_description=False)
+        conflicts = find_conflicts(arista + ocnos)
+        assert conflicts["vni_collisions"] == {}
+        assert conflicts["rt_collisions"] == {}
+
+    def test_blank_ocnos_end_across_platforms_is_not_a_collision(self):
+        # The real-world bug: the OcNOS access port has no description, so its
+        # description reads back as "". Keying on the VRF name (recovered via the
+        # VXLAN tenant mapping) still collapses it onto the Arista end.
+        arista = AristaConfigParser(ARISTA_RC_500).parse_evpn_circuits()
+        ocnos = self._ocnos_end(blank_description=True)
+        assert ocnos[0].evpn.description == ""
+        assert ocnos[0].routing_instance.instance_name == "SO500500"
+        conflicts = find_conflicts(arista + ocnos)
+        assert conflicts["vni_collisions"] == {}
+        assert conflicts["rt_collisions"] == {}
 
 
 # --------------------------------------------------------------------------- #

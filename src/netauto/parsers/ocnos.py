@@ -973,6 +973,24 @@ class OcnosConfigXMLParser:
         """
         ri_by_name = {ri.instance_name: ri for ri in self.parse_network_instances()}
 
+        # VNI -> routing instance, resolved via the VXLAN tenant's VRF-name. This
+        # is authoritative and independent of the access sub-interface's
+        # ``description``, which operators sometimes leave blank — so a circuit's
+        # VRF (and hence its service identity) is recovered even when the port has
+        # no description configured.
+        ri_by_vni: dict[int, RoutingInstance] = {}
+        for tenant in self.config.iterfind(
+            ".//vx:vxlan-tenants/vx:vxlan-tenant", namespaces=self.ns
+        ):
+            vni_text = tenant.findtext(
+                "vx:vxlan-identifier", namespaces=self.ns
+            ) or tenant.findtext("vx:config/vx:vxlan-identifier", namespaces=self.ns)
+            vrf_name = tenant.findtext("vx:config/vx:vrf-name", namespaces=self.ns)
+            if vrf_name and vni_text and vni_text.isdigit():
+                ri = ri_by_name.get(vrf_name)
+                if ri is not None:
+                    ri_by_vni[int(vni_text)] = ri
+
         # vni + arp/nd-cache-disable per access sub-interface (the ethvpn binding)
         vni_by_subif: dict[str, int] = {}
         for evpn_intf in self.config.iterfind(
@@ -1028,7 +1046,7 @@ class OcnosConfigXMLParser:
                 namespaces=self.ns,
             )
             vni = vni_by_subif[name]
-            ri = ri_by_name.get(service)
+            ri = ri_by_vni.get(vni) or ri_by_name.get(service)
 
             if action == "push" and push_stag and push_stag.isdigit():
                 stag = int(push_stag)
