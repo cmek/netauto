@@ -1,6 +1,8 @@
+import logging
 import re
 from lxml import etree
 from lxml.etree import Element
+from pydantic import ValidationError
 from netauto.models import (
     Config,
     Asn,
@@ -14,6 +16,8 @@ from netauto.models import (
 )
 from pathlib import Path
 from typing import Any, Pattern
+
+logger = logging.getLogger(__name__)
 
 INTERFACE_RE = re.compile(r"^interface\s+(?P<name>\S+)$")
 MAC_VRF_RE = re.compile(r"^mac\s+vrf\s+(?P<name>\S+)$")
@@ -1081,13 +1085,33 @@ class OcnosConfigXMLParser:
                 )
 
         for group in customer_groups.values():
+            try:
+                svc: Evpn | AzureEvpn = AzureEvpn(
+                    description=group["service"], asn=_asn(group["ri"]),
+                    vni=group["vni"], s_tag=group["s_tag"], role="customer",
+                    c_tags=sorted(set(group["c_tags"])),
+                )
+            except ValidationError as e:
+                # Q-in-Q that doesn't fit the Azure customer model — typically a
+                # shared cloud on-ramp S-TAG (e.g. AWS DX) aggregating many
+                # customers' C-TAGs, which exceeds Azure's 1-3. The per-customer
+                # C-TAG detail isn't representable here, but the circuit's
+                # VNI/RT/VRF identity is what audit/inventory needs, so record a
+                # generic circuit rather than failing the whole device read-back.
+                logger.warning(
+                    "vni %s (s_tag %s, vrf %s): %d C-TAGs do not fit the Azure "
+                    "model; recording as a generic circuit (%s)",
+                    group["vni"], group["s_tag"], group["service"],
+                    len(set(group["c_tags"])), e.errors()[0]["msg"],
+                )
+                svc = Evpn(
+                    vlan=Vlan(vlan_id=group["s_tag"], name=group["service"] or None),
+                    description=group["service"], asn=_asn(group["ri"]),
+                    vni=group["vni"],
+                )
             circuits.append(
                 EvpnCircuit(
-                    evpn=AzureEvpn(
-                        description=group["service"], asn=_asn(group["ri"]),
-                        vni=group["vni"], s_tag=group["s_tag"], role="customer",
-                        c_tags=sorted(set(group["c_tags"])),
-                    ),
+                    evpn=svc,
                     routing_instance=group["ri"],
                     interface=group["parent"],
                 )
