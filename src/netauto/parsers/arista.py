@@ -1,7 +1,11 @@
+import logging
 import re
 import json
 from pathlib import Path
 from typing import Any, Pattern
+
+from pydantic import ValidationError
+
 from netauto.models import (
     Config,
     Asn,
@@ -13,6 +17,8 @@ from netauto.models import (
     RoutingInstance,
     Vlan,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class AristaConfigParser:
@@ -562,12 +568,31 @@ class AristaConfigParser:
             ri = instances_by_name.get(instance_name)
 
             iface: str | None
+            svc: Evpn | AzureEvpn
             if tag in customer_by_stag:
                 iface, c_tags = customer_by_stag[tag]
-                svc: Evpn | AzureEvpn = AzureEvpn(
-                    description=instance_name, asn=asn, vni=vni, s_tag=tag,
-                    role="customer", c_tags=sorted(set(c_tags)),
-                )
+                try:
+                    svc = AzureEvpn(
+                        description=instance_name, asn=asn, vni=vni, s_tag=tag,
+                        role="customer", c_tags=sorted(set(c_tags)),
+                    )
+                except ValidationError as e:
+                    # Q-in-Q that doesn't fit the Azure customer model — typically
+                    # a shared cloud on-ramp S-TAG (e.g. AWS DX) aggregating many
+                    # customers' C-TAGs, which exceeds Azure's 1-3. The per-customer
+                    # C-TAG detail isn't representable here, but the circuit's
+                    # VNI/RT/VRF identity is what audit/inventory needs, so record a
+                    # generic circuit rather than failing the whole device read-back.
+                    logger.warning(
+                        "vni %s (s_tag %s, vrf %s): %d C-TAGs do not fit the Azure "
+                        "model; recording as a generic circuit (%s)",
+                        vni, tag, instance_name, len(set(c_tags)), e.errors()[0]["msg"],
+                    )
+                    iface = None
+                    svc = Evpn(
+                        vlan=Vlan(vlan_id=tag, name=vlan_name_map.get(tag) or instance_name),
+                        description=instance_name, asn=asn, vni=vni,
+                    )
             elif tag in cni_by_internal:
                 iface, azure_stag = cni_by_internal[tag]
                 svc = AzureEvpn(

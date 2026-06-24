@@ -147,6 +147,45 @@ class TestAristaReadBack:
         assert c.evpn.internal_s_tag == 2703
         assert c.interface == "Ethernet8"
 
+    def test_qinq_aggregation_falls_back_to_generic_circuit(self):
+        # A shared cloud on-ramp S-TAG (AWS DX) aggregating >3 customer C-TAGs
+        # exceeds the Azure customer model. Read-back must not abort the whole
+        # device; it records a generic circuit preserving VNI/RT/VRF instead.
+        rc = """!
+interface Ethernet10
+   switchport mode trunk
+   switchport vlan translation 1762 dot1q-tunnel 4050
+!
+interface Ethernet11
+   switchport mode trunk
+   switchport vlan translation 2205 dot1q-tunnel 4050
+!
+interface Ethernet12
+   switchport mode trunk
+   switchport vlan translation 2321 dot1q-tunnel 4050
+!
+interface Ethernet13
+   switchport mode trunk
+   switchport vlan translation 2796 dot1q-tunnel 4050
+!
+interface Vxlan1
+   vxlan source-interface Loopback0
+   vxlan vlan 4050 vni 304050
+!
+router bgp 65001
+   vlan-aware-bundle aws-dx-1-primary
+      rd 65001:304050
+      route-target both 37195:304050
+      vlan 4050
+!
+"""
+        (c,) = AristaConfigParser(rc).parse_evpn_circuits()
+        assert isinstance(c.evpn, Evpn)        # not AzureEvpn
+        assert c.evpn.vni == 304050
+        assert c.evpn.description == "aws-dx-1-primary"
+        assert c.routing_instance.rt_rd == "37195:304050"
+        assert c.interface is None
+
 
 # --------------------------------------------------------------------------- #
 # OcNOS — render -> parse round-trip
@@ -183,6 +222,30 @@ class TestOcnosRoundTrip:
         assert c.evpn.role == "cni"
         assert c.evpn.rewrite is True
         assert c.evpn.s_tag == 702
+
+    def test_qinq_aggregation_falls_back_to_generic_circuit(self):
+        # >3 C-TAGs pushed into one shared S-TAG (AWS-DX-style aggregation) on a
+        # single service. Built as two valid renders (3 + 1 c_tags) sharing the
+        # S-TAG/VNI/VRF so they group into one 4-C-TAG circuit on read-back, which
+        # exceeds the Azure model -> generic-circuit fallback (no device abort).
+        r = OcnosDeviceRenderer()
+        ri = RoutingInstance(instance_name="aws-dx-cust", instance_type="mac-vrf",
+                             rd="65002:304050", rt_rd="37195:304050")
+        a = AzureEvpn(description="aws-dx-cust", asn=65002, vni=304050, s_tag=4050,
+                      role="customer", c_tags=[11, 21, 31])
+        b = AzureEvpn(description="aws-dx-cust", asn=65002, vni=304050, s_tag=4050,
+                      role="customer", c_tags=[41])
+        tree = _ocnos_device_tree(
+            r.render_routing_instance(Asn(asn=65002), ri),
+            r.render_azure_evpn(Interface(name="eth4"), a),
+            r.render_azure_evpn(Interface(name="eth4"), b),
+        )
+        (c,) = OcnosConfigXMLParser(tree).parse_evpn_circuits()
+        assert isinstance(c.evpn, Evpn)        # not AzureEvpn
+        assert c.evpn.vni == 304050
+        assert c.evpn.description == "aws-dx-cust"
+        assert c.routing_instance.instance_name == "aws-dx-cust"
+        assert c.routing_instance.rt_rd == "37195:304050"
 
     def test_blank_subinterface_description_recovers_vrf(self):
         # A sub-interface with an EVPN binding but no `description` reads back with
