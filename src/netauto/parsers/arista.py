@@ -447,9 +447,13 @@ class AristaConfigParser:
         if not bgp_block:
             return []
 
+        # rd_by_vlan may be empty: some leaf roles bridge VXLAN without carrying a
+        # vlan-aware-bundle / EVPN rd-rt in their running-config. We still emit one
+        # Evpn per ``vxlan vlan <id> vni <vni>`` mapping below, falling back to the
+        # device BGP ASN and the VLAN name to identify the service when no rd is
+        # present (see the ``rd_info is None`` branch). So this is no longer a hard
+        # requirement.
         _, rd_by_vlan = self._parse_bgp_instances_and_vlan_map(bgp_block)
-        if not rd_by_vlan:
-            return []
 
         vxlan_block = ""
         for intf in interface_entry:
@@ -458,6 +462,10 @@ class AristaConfigParser:
                 break
         if not vxlan_block:
             return []
+
+        # Device-local BGP ASN, used for VXLAN-mapped VLANs that have no rd.
+        device_asn = self.parse_asn()
+        device_asn = device_asn.asn if device_asn is not None else None
 
         vxlan_map_re: Pattern[str] = re.compile(
             r"^\s+vxlan vlan\s+(\d+)\s+vni\s+(\d+)\s*$", re.M
@@ -473,18 +481,26 @@ class AristaConfigParser:
                 continue
             seen.add((vlan_id, vni))
 
-            rd_info = rd_by_vlan.get(vlan_id)
-            if rd_info is None:
-                continue
-            rd_value, instance_name = rd_info
-            asn_text = rd_value.split(":", 1)[0]
-            try:
-                asn = int(asn_text)
-            except ValueError:
-                continue
-
-            description = instance_name
             vlan_name = vlan_name_map.get(vlan_id)
+            rd_info = rd_by_vlan.get(vlan_id)
+            if rd_info is not None:
+                rd_value, instance_name = rd_info
+                asn_text = rd_value.split(":", 1)[0]
+                try:
+                    asn = int(asn_text)
+                except ValueError:
+                    continue
+                description = instance_name
+            else:
+                # No vlan-aware-bundle / rd-rt for this VLAN. Identify the service
+                # from the VLAN name and use the device BGP ASN; skip VLANs that
+                # carry neither (infra VLANs without a service name, or no local
+                # ASN) so we don't emit spurious circuits.
+                if not vlan_name or device_asn is None:
+                    continue
+                asn = device_asn
+                description = vlan_name
+
             evpns.append(
                 Evpn(
                     vlan=Vlan(vlan_id=vlan_id, name=vlan_name),  # pyright: ignore[reportCallIssue]
