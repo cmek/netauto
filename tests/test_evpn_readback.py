@@ -372,3 +372,53 @@ class TestVerifyCircuit:
                            role="customer", c_tags=[11, 21, 31])
         d = self._mgr().verify_circuit("Ethernet7", intent, _ri("SO303030", 65001, 37186))
         assert d.present and d.matches, d.differences
+
+
+# Bundle-less leaf: VXLAN vlan->vni mappings with `vlan <id> / name <service>` but
+# NO vlan-aware-bundle / EVPN rd-rt in `router bgp` (observed on some EOS leaf
+# roles, e.g. ar-*.ct1). parse_evpns must still recover one EVPN per mapping,
+# using the device BGP ASN and the VLAN name as the service identifier.
+ARISTA_RC_BUNDLELESS = """! Command: show running-config
+!
+vlan 920
+   name SO108883
+!
+vlan 2450
+   name SO115152
+!
+vlan 800
+   name quarantine
+!
+interface Vxlan1
+   vxlan source-interface Loopback0
+   vxlan vlan 920 vni 15920
+   vxlan vlan 2450 vni 12450
+   vxlan vlan 800 vni 10800
+!
+router bgp 64603
+   router-id 172.16.100.3
+   neighbor SPINE peer group
+   address-family ipv4
+      neighbor SPINE activate
+!
+"""
+
+
+class TestAristaBundlelessEvpn:
+    def setup_method(self):
+        cfg = AristaConfigParser(ARISTA_RC_BUNDLELESS).parse_config()
+        self.evpns = {e.vlan.vlan_id: e for e in cfg.evpns}
+
+    def test_named_vlans_recovered_without_bundle(self):
+        # the service VLANs are emitted despite no vlan-aware-bundle / rd-rt
+        assert 920 in self.evpns and 2450 in self.evpns
+        e = self.evpns[920]
+        assert e.vlan.name == "SO108883"
+        assert e.description == "SO108883"   # service id, taken from the VLAN name
+        assert e.vni == 15920
+        assert e.asn == 64603                # device BGP ASN, since there is no rd
+
+    def test_infra_named_vlan_also_emitted_but_harmless(self):
+        # 'quarantine' has a name so it is emitted; it carries no service id, so
+        # the ACX sync's _service_order_id / cloud-key match simply skips it.
+        assert self.evpns[800].description == "quarantine"
